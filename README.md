@@ -2,15 +2,31 @@
 
 Every day at 7:00 PM IST, this repo's GitHub Actions workflow:
 
-1. Picks a JavaScript/React/Next.js topic and asks Gemini to write a title,
-   short explanation, optional code snippet, and a caption.
-2. Renders a 1080x1080 image card from that content.
-3. Commits the image into `images/`.
-4. Posts the image + caption to your Telegram channel and your Instagram
-   Business account.
+1. Picks an **advanced, commonly-misunderstood** JS/React/Next.js topic
+   (see `scripts/topics.py`) - things experienced developers actually get
+   wrong, not textbook basics - and asks Gemini to **research it** (grounded
+   with Google Search, so facts stay current and accurate).
+2. Turns that research into a **4-slide carousel script**: a title/hook
+   slide, a "the buggy version" slide, a "the fix" slide, and a
+   takeaway/follow-CTA slide.
+3. Renders each slide as a 1080x1350 image on a **deep-blue gradient with a
+   circuit-pattern background**. The two middle slides use a **4-panel
+   infographic layout** (Code Input / Execution Flow / Console Output /
+   Internal Mechanics), matching a "before vs after" explainer format. The
+   title/thumbnail slide uses the bundled mascot (`assets/avatar.png`, with
+   its background auto-removed) - only that slide, as requested.
+4. Writes an SEO-style Instagram caption (hook + value + CTA) with a curated
+   mix of broad/niche/branded hashtags, plus a shorter Telegram-safe variant.
+5. Commits the images into `images/`.
+6. Posts the full carousel + caption to your Telegram channel (as an album)
+   and your Instagram Business account (as a carousel post).
 
 It runs entirely on GitHub's servers, so it does not depend on your laptop
-being on.
+being on. To change the tone, topic pool, slide count, color theme, or
+hashtag mix, edit `scripts/topics.py` and the prompt/theme constants in
+`scripts/generate.py`. To change the mascot, replace `assets/avatar.png`
+with any image that has a plain white/light background (it gets silhouetted
+automatically).
 
 ## One-time setup
 
@@ -65,9 +81,10 @@ You can also trigger a post immediately (to test end-to-end) from **Actions
   Actions tab occasionally.
 - **Instagram Content Publishing has a rate limit** (25 posts/24h per
   account), so one post a day is well within limits.
-- The generated image for each day is committed to `images/` in this repo
-  (that's also how Instagram fetches it - via its public raw GitHub URL).
-  Feel free to periodically delete old ones if the repo grows too large.
+- The generated images for each day (one per carousel slide) are committed
+  to `images/` in this repo (that's also how Instagram fetches them - via
+  their public raw GitHub URLs). Feel free to periodically delete old ones
+  if the repo grows too large.
 - To change the posting time, edit the `cron` line in
   `.github/workflows/daily-post.yml` (times are in UTC).
 - To change the topic pool or writing style, edit `scripts/topics.py` and
