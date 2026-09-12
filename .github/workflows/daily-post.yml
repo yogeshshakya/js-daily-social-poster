@@ -27,27 +27,46 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Generate today's content + image
+      - name: Generate today's carousel content + images
         id: generate
         working-directory: scripts
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python generate.py | tee /tmp/generate_output.txt
-      - name: Extract image filename
-        id: filename
-        run: |
-          IMAGE_FILENAME=$(grep '^IMAGE_FILENAME=' /tmp/generate_output.txt | cut -d= -f2)
-          echo "IMAGE_FILENAME=$IMAGE_FILENAME" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and push generated image
+      - name: Extract image filenames
+        id: filenames
+        run: |
+          FILES=$(grep '^IMAGE_FILENAMES=' /tmp/generate_output.txt | cut -d= -f2)
+          echo "IMAGE_FILENAMES=$FILES" >> "$GITHUB_OUTPUT"
+          echo "Generated files: $FILES"
+
+      - name: Commit and push generated images
         id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "images/${{ steps.filename.outputs.IMAGE_FILENAME }}"
-          git commit -m "Daily post image: ${{ steps.filename.outputs.IMAGE_FILENAME }}"
+          IFS=',' read -ra FILES <<< "${{ steps.filenames.outputs.IMAGE_FILENAMES }}"
+          for f in "${FILES[@]}"; do
+            git add "images/$f"
+          done
+          git commit -m "Daily carousel: ${{ steps.filenames.outputs.IMAGE_FILENAMES }}"
           git push
           echo "SHA=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build image paths + raw URLs
+        id: urls
+        run: |
+          IFS=',' read -ra FILES <<< "${{ steps.filenames.outputs.IMAGE_FILENAMES }}"
+          SHA="${{ steps.commit.outputs.SHA }}"
+          PATHS=""
+          URLS=""
+          for f in "${FILES[@]}"; do
+            PATHS="${PATHS}images/${f},"
+            URLS="${URLS}https://raw.githubusercontent.com/${{ github.repository }}/${SHA}/images/${f},"
+          done
+          echo "IMAGE_PATHS=${PATHS%,}" >> "$GITHUB_OUTPUT"
+          echo "RAW_IMAGE_URLS=${URLS%,}" >> "$GITHUB_OUTPUT"
 
       - name: Post to Telegram + Instagram
         env:
@@ -55,7 +74,8 @@ jobs:
           TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           IG_BUSINESS_ID: ${{ secrets.IG_BUSINESS_ID }}
-          IMAGE_PATH: images/${{ steps.filename.outputs.IMAGE_FILENAME }}
-          RAW_IMAGE_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ steps.commit.outputs.SHA }}/images/${{ steps.filename.outputs.IMAGE_FILENAME }}
-          CAPTION_FILE: build/caption.txt
+          IMAGE_PATHS: ${{ steps.urls.outputs.IMAGE_PATHS }}
+          RAW_IMAGE_URLS: ${{ steps.urls.outputs.RAW_IMAGE_URLS }}
+          CAPTION_FILE_INSTAGRAM: build/caption_instagram.txt
+          CAPTION_FILE_TELEGRAM: build/caption_telegram.txt
         run: python scripts/post.py
