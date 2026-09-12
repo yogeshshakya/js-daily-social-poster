@@ -1,0 +1,61 @@
+name: Daily JS/React/Next.js post
+
+on:
+  schedule:
+    # 13:30 UTC = 19:00 (7 PM) IST, every day
+    - cron: "30 13 * * *"
+  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system fonts
+        run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate today's content + image
+        id: generate
+        working-directory: scripts
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python generate.py | tee /tmp/generate_output.txt
+      - name: Extract image filename
+        id: filename
+        run: |
+          IMAGE_FILENAME=$(grep '^IMAGE_FILENAME=' /tmp/generate_output.txt | cut -d= -f2)
+          echo "IMAGE_FILENAME=$IMAGE_FILENAME" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push generated image
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "images/${{ steps.filename.outputs.IMAGE_FILENAME }}"
+          git commit -m "Daily post image: ${{ steps.filename.outputs.IMAGE_FILENAME }}"
+          git push
+          echo "SHA=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Post to Telegram + Instagram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_BUSINESS_ID: ${{ secrets.IG_BUSINESS_ID }}
+          IMAGE_PATH: images/${{ steps.filename.outputs.IMAGE_FILENAME }}
+          RAW_IMAGE_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ steps.commit.outputs.SHA }}/images/${{ steps.filename.outputs.IMAGE_FILENAME }}
+          CAPTION_FILE: build/caption.txt
+        run: python scripts/post.py
