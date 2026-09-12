@@ -11,6 +11,22 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      - name: List available Gemini models for this API key
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          curl -s "https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}" \
+            | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          if 'models' not in data:
+              print('ERROR response:', data)
+          else:
+              for m in data['models']:
+                  if 'generateContent' in m.get('supportedGenerationMethods', []):
+                      print(m['name'])
+          "
+
       - name: Check Telegram bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
