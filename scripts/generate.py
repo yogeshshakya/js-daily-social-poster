@@ -68,8 +68,31 @@ IMAGES_DIR = os.path.join(REPO_ROOT, "images")
 BUILD_DIR = os.path.join(REPO_ROOT, "build")
 ASSETS_DIR = os.path.join(REPO_ROOT, "assets")
 AVATAR_PATH = os.path.join(ASSETS_DIR, "avatar.png")
+BG_REFERENCE_PATH = os.path.join(ASSETS_DIR, "bg_reference.jpg")
 os.makedirs(IMAGES_DIR, exist_ok=True)
+HISTORY_PATH = os.path.join(REPO_ROOT, "data", "topic_history.json")
+HISTORY_MAX_ENTRIES = 30
+
 os.makedirs(BUILD_DIR, exist_ok=True)
+os.makedirs(os.path.dirname(HISTORY_PATH), exist_ok=True)
+
+# Image-generation model candidates, tried in order (same pattern as the text
+# MODEL_CANDIDATES above). AI background generation is best-effort: if every
+# candidate fails (no billing enabled, model unavailable, quota, network),
+# generate_daily_background() falls back to the procedural gradient so a
+# single day's post is never blocked by this.
+_env_image_model = os.environ.get("IMAGE_MODEL")
+IMAGE_MODEL_CANDIDATES = []
+if _env_image_model:
+    IMAGE_MODEL_CANDIDATES.append(_clean_model_name(_env_image_model))
+for _fallback in [
+    "gemini-2.5-flash-image",
+    "gemini-3-pro-image",
+    "gemini-2.5-flash-image-preview",
+    "gemini-2.0-flash-preview-image-generation",
+]:
+    if _fallback not in IMAGE_MODEL_CANDIDATES:
+        IMAGE_MODEL_CANDIDATES.append(_fallback)
 
 # ---------------------------------------------------------------------------
 # Theme: deep blue gradient + circuit pattern, matching the brand reference
@@ -132,15 +155,119 @@ def wrap_text(draw, text, font, max_width, max_chars_hard=None):
 
 
 # ---------------------------------------------------------------------------
-# Background: gradient + faint circuit pattern + scattered tech glyphs
+# Background: AI-generated texture (once/day, best-effort) or a procedural
+# gradient fallback, then a faint circuit pattern + scattered tech glyphs
+# drawn fresh on top of every slide for per-slide variety.
 # ---------------------------------------------------------------------------
-def make_background(seed):
-    img = Image.new("RGB", (W, H), GRAD_TOP)
-    draw = ImageDraw.Draw(img)
-    for y in range(H):
-        t = y / (H - 1)
-        draw.line([(0, y), (W, y)], fill=blend(GRAD_TOP, GRAD_BOTTOM, t))
+_BASE_TEXTURE = None  # set once per run by generate_daily_background()
 
+
+def _encode_image_b64(path):
+    import base64
+    import mimetypes
+
+    mime = mimetypes.guess_type(path)[0] or "image/jpeg"
+    with open(path, "rb") as f:
+        return mime, base64.b64encode(f.read()).decode("ascii")
+
+
+def _extract_inline_image(response_json):
+    try:
+        parts = response_json["candidates"][0]["content"]["parts"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    for part in parts:
+        inline = part.get("inlineData") or part.get("inline_data")
+        if inline and inline.get("data"):
+            import base64
+            from io import BytesIO
+
+            raw = base64.b64decode(inline["data"])
+            return Image.open(BytesIO(raw)).convert("RGB")
+    return None
+
+
+def generate_daily_background():
+    """Best-effort: ask a Gemini image-generation model for a background
+    texture in the style of assets/bg_reference.jpg. Returns a PIL Image
+    sized (W, H), or None if generation isn't available/fails - callers
+    must handle None by falling back to the procedural gradient."""
+    if not os.path.exists(BG_REFERENCE_PATH):
+        return None
+
+    mime, b64 = _encode_image_b64(BG_REFERENCE_PATH)
+    prompt = (
+        "Generate a seamless-looking abstract background image, portrait "
+        "orientation, in the exact color mood and visual style of the "
+        "attached reference: deep navy/blue gradient with a subtle glowing "
+        "tech circuit-board pattern (thin connected lines and small nodes), "
+        "very dark and low-contrast overall so text and UI panels stay "
+        "readable when placed on top. No text, no logos, no watermarks, no "
+        "people, no readable code - purely an abstract textured background."
+    )
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"inlineData": {"mimeType": mime, "data": b64}},
+            ]
+        }],
+        "generationConfig": {"responseModalities": ["IMAGE"]},
+    }
+
+    for model in IMAGE_MODEL_CANDIDATES:
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={GEMINI_API_KEY}"
+        )
+        try:
+            resp = requests.post(url, json=payload, timeout=90)
+        except requests.RequestException as e:
+            print(f"AI background: network error calling '{model}': {e}", file=sys.stderr)
+            continue
+        if not resp.ok:
+            print(
+                f"AI background: model '{model}' failed with {resp.status_code}: "
+                f"{resp.text[:300]}",
+                file=sys.stderr,
+            )
+            continue
+        img = _extract_inline_image(resp.json())
+        if img is None:
+            print(f"AI background: model '{model}' returned no image data.", file=sys.stderr)
+            continue
+
+        print(f"AI background: generated successfully with '{model}'.", file=sys.stderr)
+        # Cover-fit to our canvas size (resize then center-crop).
+        src_w, src_h = img.size
+        scale = max(W / src_w, H / src_h)
+        img = img.resize((int(src_w * scale) + 1, int(src_h * scale) + 1), Image.LANCZOS)
+        left = (img.width - W) // 2
+        top = (img.height - H) // 2
+        img = img.crop((left, top, left + W, top + H))
+
+        # Legibility wash: darken toward our brand navy so white text/panels
+        # placed on top stay readable regardless of what the model produced.
+        wash = Image.new("RGB", (W, H), GRAD_TOP)
+        img = Image.blend(img, wash, alpha=0.45)
+        return img
+
+    print("AI background: all candidate models failed, using procedural gradient instead.",
+          file=sys.stderr)
+    return None
+
+
+def make_background(seed):
+    if _BASE_TEXTURE is not None:
+        img = _BASE_TEXTURE.copy()
+    else:
+        img = Image.new("RGB", (W, H), GRAD_TOP)
+        draw = ImageDraw.Draw(img)
+        for y in range(H):
+            t = y / (H - 1)
+            draw.line([(0, y), (W, y)], fill=blend(GRAD_TOP, GRAD_BOTTOM, t))
+
+    draw = ImageDraw.Draw(img)
     rng = random.Random(seed)
     node_color = blend(GRAD_BOTTOM, ACCENT, 0.35)
     line_color = blend(GRAD_BOTTOM, ACCENT, 0.16)
@@ -169,6 +296,68 @@ def draw_check_badge(draw, cx, cy, r=16, fill=CHECK_GREEN):
     draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill)
     draw.line([(cx - r * 0.45, cy), (cx - r * 0.1, cy + r * 0.4), (cx + r * 0.5, cy - r * 0.4)],
               fill=(8, 16, 40), width=3, joint="curve")
+
+
+def draw_flow_chevron(draw, cx, cy, direction="right", r=14):
+    """Small circular arrow marker used to visually connect grid panels into a flow."""
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=blend(GRAD_BOTTOM, ACCENT, 0.30),
+                 outline=ACCENT, width=2)
+    if direction == "right":
+        draw.line([(cx - 5, cy - 6), (cx + 4, cy), (cx - 5, cy + 6)], fill=WHITE, width=3, joint="curve")
+    else:
+        draw.line([(cx - 6, cy - 5), (cx, cy + 4), (cx + 6, cy - 5)], fill=WHITE, width=3, joint="curve")
+
+
+def draw_slide_role_icon(draw, cx, cy, role, r=22):
+    """Icon badge next to a content slide's heading, signaling its narrative role
+    (bug/problem, idea/fix, clock/impact, chart/data, star/pro-tip, warning)."""
+    role = (role or "idea").lower()
+    bg = ACCENT
+    fg = (6, 14, 32)
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=bg)
+
+    if role == "bug":
+        # simple, bold "beetle" glyph readable at small badge sizes:
+        # oval body split by a center line, 3 short legs per side, 2 antennae
+        bw, bh = r * 0.42, r * 0.56
+        draw.ellipse([cx - bw, cy - bh, cx + bw, cy + bh], fill=fg)
+        draw.line([(cx, cy - bh), (cx, cy + bh)], fill=bg, width=2)
+        for ly in (-0.45, 0, 0.45):
+            yy = cy + ly * bh
+            draw.line([(cx - bw, yy), (cx - r * 0.82, yy)], fill=fg, width=3)
+            draw.line([(cx + bw, yy), (cx + r * 0.82, yy)], fill=fg, width=3)
+        draw.line([(cx - bw * 0.5, cy - bh), (cx - r * 0.55, cy - r * 0.85)], fill=fg, width=2)
+        draw.line([(cx + bw * 0.5, cy - bh), (cx + r * 0.55, cy - r * 0.85)], fill=fg, width=2)
+    elif role == "clock":
+        cr = r * 0.62
+        draw.ellipse([cx - cr, cy - cr, cx + cr, cy + cr], outline=fg, width=3)
+        draw.line([(cx, cy), (cx, cy - cr * 0.7)], fill=fg, width=3)
+        draw.line([(cx, cy), (cx + cr * 0.5, cy + cr * 0.15)], fill=fg, width=3)
+    elif role == "chart":
+        bw = r * 0.32
+        heights = [r * 0.5, r * 0.9, r * 0.65]
+        bx = cx - 1.5 * bw - 4
+        for i, h in enumerate(heights):
+            x0 = bx + i * (bw + 6)
+            draw.rectangle([x0, cy + r * 0.6 - h, x0 + bw, cy + r * 0.6], fill=fg)
+    elif role == "star":
+        pts = []
+        import math
+        for i in range(10):
+            ang = math.pi / 2 + i * math.pi / 5
+            rad = r * 0.75 if i % 2 == 0 else r * 0.32
+            pts.append((cx + rad * math.cos(ang), cy - rad * math.sin(ang)))
+        draw.polygon(pts, fill=fg)
+    elif role == "warning":
+        h = r * 0.85
+        draw.polygon([(cx, cy - h), (cx - h * 0.95, cy + h * 0.7), (cx + h * 0.95, cy + h * 0.7)], fill=fg)
+        draw.ellipse([cx - 3, cy + h * 0.35, cx + 3, cy + h * 0.35 + 6], fill=bg)
+        draw.line([(cx, cy - h * 0.35), (cx, cy + h * 0.2)], fill=bg, width=3)
+    else:  # idea / lightbulb (default: fix / how-it-works slides)
+        br = r * 0.5
+        draw.ellipse([cx - br, cy - br * 1.1, cx + br, cy + br * 0.9], outline=fg, width=3)
+        draw.line([(cx - r * 0.22, cy + br * 0.75), (cx + r * 0.22, cy + br * 0.75)], fill=fg, width=3)
+        draw.line([(cx - r * 0.15, cy + r * 0.65), (cx + r * 0.15, cy + r * 0.65)], fill=fg, width=2)
 
 
 # ---------------------------------------------------------------------------
@@ -230,38 +419,80 @@ def draw_chrome(draw, slide_index, total, kicker=None):
 # ---------------------------------------------------------------------------
 # Title / thumbnail slide (uses the mascot avatar)
 # ---------------------------------------------------------------------------
+def draw_speech_bubble(draw, cx, bottom_y, text, font, max_width=560, fill=None, text_fill=None):
+    """Rounded speech bubble with a downward tail, bottom-anchored at (cx, bottom_y)."""
+    fill = fill or WHITE
+    text_fill = text_fill or (10, 20, 46)
+    pad_x, pad_y, line_h = 26, 20, 34
+    lines = wrap_text(draw, text, font, max_width - 2 * pad_x)[:3]
+    text_w = max((draw.textlength(l, font=font) for l in lines), default=0)
+    box_w = text_w + 2 * pad_x
+    box_h = len(lines) * line_h + 2 * pad_y
+    tail = 18
+    top = bottom_y - box_h - tail
+    left = cx - box_w / 2
+    draw.rounded_rectangle([left, top, left + box_w, top + box_h], radius=20, fill=fill)
+    draw.polygon(
+        [(cx - tail, top + box_h), (cx + tail, top + box_h), (cx, top + box_h + tail)],
+        fill=fill,
+    )
+    ty = top + pad_y
+    for line in lines:
+        tw = draw.textlength(line, font=font)
+        draw.text((cx - tw / 2, ty), line, font=font, fill=text_fill)
+        ty += line_h
+    return top  # top edge, in case caller wants to reserve space above it
+
+
 def render_title_slide(slide, index, total, out_path):
     img = make_background(seed=f"{TODAY}-title")
     draw = ImageDraw.Draw(img)
-    draw_chrome(draw, index, total, kicker=slide.get("kicker", "JS DEEP DIVE"))
+    kicker = slide.get("kicker", "JS DEEP DIVE")
+    draw_chrome(draw, index, total, kicker=kicker)
 
     margin = 60
-    title_font = load_font("DejaVuSans-Bold.ttf", 66)
-    subtitle_font = load_font("DejaVuSans.ttf", 34)
+    title_font = load_font("DejaVuSans-Bold.ttf", 64)
+    subtitle_font = load_font("DejaVuSans.ttf", 32)
 
-    y = 190
+    # "ADVANCED" difficulty badge, right after the kicker pill
+    tag_font = load_font("DejaVuSans-Bold.ttf", 26)
+    kicker_w = draw.textlength(kicker, font=tag_font) + 40
+    badge_text = "ADVANCED"
+    badge_w = draw.textlength(badge_text, font=tag_font) + 34
+    badge_x = margin + kicker_w + 14
+    draw.rounded_rectangle([badge_x, 90, badge_x + badge_w, 90 + 46], radius=23,
+                            fill=(255, 138, 76), outline=None)
+    draw.text((badge_x + 17, 90 + 10), badge_text, font=tag_font, fill=(40, 16, 4))
+
+    y = 180
     title_lines = wrap_text(draw, slide["title"], title_font, W - 2 * margin)[:4]
     for line in title_lines:
         draw.text((margin, y), line, font=title_font, fill=WHITE)
-        y += 78
-    y += 16
+        y += 76
+    y += 14
     for line in wrap_text(draw, slide.get("subtitle", ""), subtitle_font, W - 2 * margin)[:3]:
         draw.text((margin, y), line, font=subtitle_font, fill=MUTED)
-        y += 44
+        y += 42
+    y += 10
 
-    # Mascot avatar, bottom area, above footer
-    avatar_h = 600
+    swipe_font = load_font("DejaVuSans-Bold.ttf", 28)
+    swipe_text = "SWIPE TO LEARN  →"
+    draw.text((margin, y), swipe_text, font=swipe_font, fill=ACCENT)
+
+    # Mascot avatar with a speech bubble "explaining" the topic
+    avatar_h = 500
     avatar = load_avatar_cutout(avatar_h)
     if avatar:
         ax = (W - avatar.width) // 2
         ay = H - 150 - avatar_h
+        head_cx = ax + avatar.width // 2
+
+        bubble_font = load_font("DejaVuSans-Bold.ttf", 27)
+        avatar_line = slide.get("avatar_line") or "Let's break this down!"
+        draw_speech_bubble(draw, head_cx, ay - 6, avatar_line, bubble_font)
+
         img.paste(avatar, (ax, ay), avatar)
         draw = ImageDraw.Draw(img)  # redraw handle after paste
-
-    swipe_font = load_font("DejaVuSans-Bold.ttf", 30)
-    swipe_text = "SWIPE TO LEARN  →"
-    stw = draw.textlength(swipe_text, font=swipe_font)
-    draw.text(((W - stw) / 2, H - 150 - avatar_h - 60), swipe_text, font=swipe_font, fill=ACCENT)
 
     draw_chrome(draw, index, total, kicker=None)  # repaint footer over avatar edge if needed
     img.save(out_path, "PNG")
@@ -345,7 +576,7 @@ def render_content_slide(slide, index, total, out_path):
     margin = 60
     heading_font = load_font("DejaVuSans-Bold.ttf", 46)
     y = 176
-    draw_check_badge(draw, margin + 20, y + 30, r=20)
+    draw_slide_role_icon(draw, margin + 22, y + 30, slide.get("icon"), r=22)
     heading_lines = wrap_text(draw, slide.get("heading", ""), heading_font, W - 2 * margin - 60)[:2]
     for line in heading_lines:
         draw.text((margin + 56, y), line, font=heading_font, fill=WHITE)
@@ -367,6 +598,19 @@ def render_content_slide(slide, index, total, out_path):
         px = margin + col * (panel_w + gap)
         py = grid_top + row * (panel_h + gap)
         render_panel(draw, px, py, panel_w, panel_h, panel)
+
+    # Connect the 4 panels into a visual flow: -> across each row, v down each column
+    hgap_x = margin + panel_w + gap / 2
+    row0_cy = grid_top + panel_h / 2
+    row1_cy = grid_top + panel_h + gap + panel_h / 2
+    draw_flow_chevron(draw, hgap_x, row0_cy, "right")
+    draw_flow_chevron(draw, hgap_x, row1_cy, "right")
+
+    vgap_y = grid_top + panel_h + gap / 2
+    col0_cx = margin + panel_w / 2
+    col1_cx = margin + panel_w + gap + panel_w / 2
+    draw_flow_chevron(draw, col0_cx, vgap_y, "down")
+    draw_flow_chevron(draw, col1_cx, vgap_y, "down")
 
     img.save(out_path, "PNG")
 
@@ -460,6 +704,95 @@ def gemini_call(payload, retries_per_model=2):
     )
 
 
+# ---------------------------------------------------------------------------
+# Topic selection: ask Gemini to pick today's topic itself (instead of a
+# fixed local list), staying within our subjects and avoiding recent repeats.
+# ---------------------------------------------------------------------------
+SUBJECTS = (
+    "JavaScript latest/new language features, JavaScript performance "
+    "optimization, React (internals + best practices), and Next.js "
+    "(internals + best practices)"
+)
+
+# A few examples purely to calibrate the STYLE/DEPTH expected (advanced,
+# narrow, commonly-misunderstood) - not an exhaustive pool Gemini is limited
+# to. Reused from the old local topics.py list.
+STYLE_EXAMPLES = TOPICS[:4]
+
+
+def load_topic_history():
+    if not os.path.exists(HISTORY_PATH):
+        return []
+    try:
+        with open(HISTORY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+    except (json.JSONDecodeError, OSError):
+        pass
+    return []
+
+
+def save_topic_history(history):
+    trimmed = history[-HISTORY_MAX_ENTRIES:]
+    with open(HISTORY_PATH, "w", encoding="utf-8") as f:
+        json.dump(trimmed, f, indent=2)
+
+
+def choose_topic(history):
+    """Ask Gemini to pick today's specific topic itself, within SUBJECTS,
+    avoiding anything already covered recently. Raises on total failure so
+    the caller can fall back to the local topics.py pool."""
+    avoid = [entry.get("topic", "") for entry in history if entry.get("topic")]
+    avoid_block = (
+        "Topics already covered recently - pick something meaningfully "
+        "different from ALL of these (not just a reworded duplicate):\n"
+        + "\n".join(f"- {t}" for t in avoid)
+        if avoid
+        else "No topics covered yet - pick freely."
+    )
+    examples_block = "\n".join(f"- {t}" for t in STYLE_EXAMPLES)
+
+    prompt = f"""You are picking today's topic for "Modern JavaScript Hub", an
+Instagram/Telegram account teaching {SUBJECTS} to intermediate/senior
+developers.
+
+The topic must be ADVANCED and NARROW - a specific commonly-misunderstood
+behavior or mistake experienced developers actually make in real code, not a
+beginner definition or a broad category name. For calibration, here is the
+STYLE and DEPTH expected (do not just reuse these, they're only examples):
+{examples_block}
+
+{avoid_block}
+
+Reply with ONLY a JSON object of this exact shape, no markdown fences:
+{{"topic": "one specific, narrow, advanced topic phrased as a full sentence
+  describing the exact misunderstood behavior, like the style examples above"}}"""
+
+    data = gemini_call(
+        {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.9,
+                "responseMimeType": "application/json",
+            },
+        }
+    )
+    text = data["candidates"][0]["content"]["parts"][0]["text"]
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise RuntimeError(f"Could not parse topic-selection response as JSON:\n{text}")
+        parsed = json.loads(match.group(0))
+
+    topic = (parsed.get("topic") or "").strip()
+    if not topic:
+        raise RuntimeError(f"Gemini topic-selection response missing 'topic': {parsed}")
+    return topic
+
+
 def research_topic(topic):
     # Note: Google Search grounding ("tools": [{"google_search": {}}]) is a
     # paid/billing-enabled feature and returns persistent 429s on free-tier
@@ -513,21 +846,42 @@ Produce a JSON object (ONLY JSON, no markdown fences) with this exact shape:
       "type": "title",
       "kicker": "3-4 word label, e.g. JS DEEP DIVE",
       "title": "punchy 5-9 word hook naming the specific bug/gotcha",
-      "subtitle": "one short sentence promising the fix they'll learn"
+      "subtitle": "one short sentence promising the fix they'll learn",
+      "avatar_line": "a short 3-7 word first-person line the mascot character
+        is 'saying' in a speech bubble, as if personally inviting the viewer
+        into this topic - e.g. 'Let's debug this together!' or 'You've
+        shipped this bug before...' - punchy and conversational, not a
+        repeat of the title"
     }},
     {{
       "type": "content",
       "heading": "3-5 word heading for this slide, e.g. 'Fix It With let'",
+      "icon": "one of: bug, warning, idea, clock, chart, star - pick whichever
+        best matches this slide's role (bug=the problem/buggy code,
+        warning=a risk/gotcha, idea=the fix/how it works, clock=timing or
+        real-world impact over time, chart=data/comparison/impact, star=pro
+        tip/bonus insight)",
       "panels": [
-        {{"title": "Code Input", "kind": "code", "lines": ["up to 5 short code lines, <=30 chars each, showing the buggy or example code"]}},
-        {{"title": "Execution Flow", "kind": "flow", "lines": ["2-4 short labels (<=26 chars) showing what actually happens step by step"], "result": "short verified/result label, <=22 chars"}},
-        {{"title": "Console Output", "kind": "output", "lines": ["2-4 short output values/lines, <=20 chars each"], "result": "short label, <=22 chars"}},
-        {{"title": "Internal Mechanics", "kind": "flow", "lines": ["2-4 short labels (<=26 chars) explaining the WHY at the engine/runtime level"], "result": "short label, <=22 chars"}}
+        {{"title": "short 2-3 word panel label fitting this panel's role, e.g. 'Code Input', 'Buggy Code', 'The Fix', 'Console Output', 'Why It Happens', 'Real Impact', 'Pro Tip'", "kind": "code | flow | output (pick whichever best fits this panel's content)", "lines": ["for kind=code: up to 5 short code lines, <=30 chars each. for kind=flow: 2-4 short labels <=26 chars, sequential steps/facts. for kind=output: 2-4 short values/lines <=20 chars each"], "result": "optional short verified/result/takeaway label, <=22 chars"}}
       ]
     }},
-    ... exactly 2 of these "content" slides total (first = the buggy/naive
-    version, second = the correct fix), each with exactly 4 panels as shown
-    above ...,
+    ... exactly 6 of these "content" slides total, each with exactly 4
+    panels, following this narrative arc across the 6 slides so the full
+    carousel tells a complete step-by-step story (don't label the slides
+    with these exact words, just follow the arc via natural headings):
+      1. THE PROBLEM - show the buggy/naive code and its unexpected output
+      2. WHY IT HAPPENS - the actual internal/engine mechanism causing it
+      3. THE FIX - the corrected code
+      4. HOW THE FIX WORKS - the internal mechanism that makes the fix work
+      5. REAL-WORLD IMPACT - a concrete scenario where this bug actually
+         bites (production incident, perf issue, confusing behavior, etc.)
+      6. PRO TIP - a related best practice, edge case, or common variant of
+         this same mistake developers should also watch for
+    Vary the 4 panel titles/kinds per slide to fit what that slide is
+    actually showing (e.g. slide 5 might use panels like "Scenario",
+    "What Breaks", "User Impact", "Root Cause" instead of the code/output
+    panel titles used in slides 1-4) rather than repeating identical panel
+    labels on every slide ...,
     {{
       "type": "summary",
       "heading": "short takeaway heading",
@@ -538,19 +892,26 @@ Produce a JSON object (ONLY JSON, no markdown fences) with this exact shape:
   "caption": "an SEO-friendly Instagram caption, 3-5 sentences: first
     sentence is a scroll-stopping hook containing the main keyword (e.g.
     'JavaScript closures', 'React re-renders'), then deliver real value in
-    plain language, then a short call to action to save/share/follow. Do
-    NOT include hashtags in this field.",
+    plain language while naturally weaving in 2-3 high-search-volume,
+    evergreen keyword phrases developers actually search for around this
+    exact topic (e.g. 'javascript interview questions', 'react performance
+    optimization', 'nextjs best practices' - whichever genuinely fit this
+    topic, don't force unrelated ones), then a short call to action to
+    save/share/follow. Do NOT include hashtags in this field.",
   "hashtags": [
-    "8 to 12 hashtags as a flat array (include the # in each string), mixing:
+    "10 to 15 hashtags as a flat array (include the # in each string), mixing:
      3-4 broad/high-volume (#JavaScript #WebDevelopment #Coding
-     #Programming), 4-5 niche/specific to THIS exact topic, and 1-2
+     #Programming), 5-7 niche/specific to THIS exact topic (include realistic
+     high-traffic developer-community tags like #100DaysOfCode #CodeNewbie
+     #WebDev #Frontend #ReactJS #JavaScriptTips where relevant), and 1-2
      community/branded (#DevCommunity #ModernJavaScriptHub)."
   ]
 }}
 
 All on-image text must be short and punchy - this is for a 1080x1350 image
 panel, not an essay. Keep code lines under 30 characters so they don't get
-truncated."""
+truncated. Total slide count must be exactly 8 (1 title + 6 content + 1
+summary)."""
 
     data = gemini_call(
         {
@@ -584,9 +945,15 @@ truncated."""
 def build_captions(caption, hashtags):
     hashtags = [h if h.startswith("#") else f"#{h}" for h in hashtags]
 
-    ig = caption.strip() + "\n\n" + " ".join(hashtags[:12])
+    # Instagram's app collapses consecutive plain blank lines, so the usual
+    # trick to get real visual separation before the hashtag block is a
+    # short stack of lines containing an invisible Braille-blank character
+    # (U+2800) instead of nothing.
+    ig_spacer = "\n" + "\n".join(["⠀"] * 4) + "\n"
+    ig = caption.strip() + ig_spacer + " ".join(hashtags[:15])
     ig = ig[:2200]
 
+    # Telegram doesn't collapse blank lines, so a plain double newline is enough.
     tg = caption.strip() + "\n\n" + " ".join(hashtags[:5])
     if len(tg) > 1024:
         tg = tg[:1000].rsplit(" ", 1)[0] + "…"
@@ -595,8 +962,23 @@ def build_captions(caption, hashtags):
 
 
 def main():
+    global _BASE_TEXTURE
     print(f"Gemini model order (first available wins): {MODEL_CANDIDATES}", file=sys.stderr)
-    topic = random.choice(TOPICS)
+    print(f"Image model order (best-effort): {IMAGE_MODEL_CANDIDATES}", file=sys.stderr)
+    _BASE_TEXTURE = generate_daily_background()
+
+    history = load_topic_history()
+    try:
+        topic = choose_topic(history)
+        print(f"Topic chosen by Gemini: {topic}", file=sys.stderr)
+    except Exception as e:
+        topic = random.choice(TOPICS)
+        print(
+            f"Gemini topic selection failed ({e}); falling back to local topic "
+            f"pool: {topic}",
+            file=sys.stderr,
+        )
+
     print(f"Researching topic: {topic}", file=sys.stderr)
     research = research_topic(topic)
 
@@ -625,6 +1007,9 @@ def main():
             f,
             indent=2,
         )
+
+    history.append({"date": TODAY, "topic": topic})
+    save_topic_history(history)
 
     print(f"IMAGE_FILENAMES={','.join(filenames)}")
     print(f"Generated {total}-slide carousel for topic: {topic}", file=sys.stderr)
