@@ -47,7 +47,14 @@ _env_model = os.environ.get("GEMINI_MODEL")
 MODEL_CANDIDATES = []
 if _env_model:
     MODEL_CANDIDATES.append(_clean_model_name(_env_model))
-for _fallback in ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"]:
+for _fallback in [
+    "gemini-flash-latest",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+]:
     if _fallback not in MODEL_CANDIDATES:
         MODEL_CANDIDATES.append(_fallback)
 
@@ -415,7 +422,7 @@ def render_slide(slide, index, total, out_path):
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
-def gemini_call(payload, retries_per_model=3):
+def gemini_call(payload, retries_per_model=2):
     last_status, last_body = None, ""
     for model in MODEL_CANDIDATES:
         url = (
