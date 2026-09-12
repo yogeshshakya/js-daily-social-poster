@@ -30,7 +30,7 @@ from PIL import Image, ImageDraw, ImageFont
 from topics import TOPICS
 
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 
 IST = timezone(timedelta(hours=5, minutes=30))
 TODAY = datetime.now(IST).strftime("%Y-%m-%d")
