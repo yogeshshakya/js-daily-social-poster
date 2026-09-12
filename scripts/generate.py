@@ -411,12 +411,21 @@ def gemini_call(payload, max_retries=5):
             time.sleep(delay)
             delay = min(delay * 2, 120)
             continue
-        resp.raise_for_status()
+        if not resp.ok:
+            raise RuntimeError(f"Gemini API error {resp.status_code}: {resp.text[:1000]}")
         return resp.json()
-    raise RuntimeError("Gemini API kept returning 429 (rate limited) after all retries.")
+    raise RuntimeError(f"Gemini API kept returning 429 (rate limited) after all retries: {resp.text[:1000]}")
 
 
 def research_topic(topic):
+    # Note: Google Search grounding ("tools": [{"google_search": {}}]) is a
+    # paid/billing-enabled feature and returns persistent 429s on free-tier
+    # API keys, so this step relies on the model's own trained knowledge
+    # instead. That's fine for stable language/framework mechanics (closures,
+    # scheduling, hooks semantics, etc.) which don't change day to day; it's
+    # just not suitable for "literally today's news" style topics. If you
+    # later enable billing on your Google AI Studio project, you can restore
+    # grounding by adding back "tools": [{"google_search": {}}] below.
     prompt = f"""Research this ADVANCED, commonly-misunderstood JavaScript/React/Next.js
 topic - the kind experienced developers still get wrong in real code, not a
 beginner definition. Topic: "{topic}"
@@ -425,13 +434,13 @@ Write a precise, technically accurate briefing (250-400 words) I will use to
 build a step-by-step "here's the bug, here's why, here's the fix" carousel
 post. Include: the exact buggy behavior/output, WHY it happens internally
 (the actual mechanism, not a hand-wave), and the correct fix with what
-changes internally. Do not invent APIs or behavior that doesn't exist.
+changes internally. Do not invent APIs or behavior that doesn't exist - if
+you are not fully certain of a detail, leave it out rather than guessing.
 Plain text only."""
 
     data = gemini_call(
         {
             "contents": [{"parts": [{"text": prompt}]}],
-            "tools": [{"google_search": {}}],
             "generationConfig": {"temperature": 0.4},
         }
     )
