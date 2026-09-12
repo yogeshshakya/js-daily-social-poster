@@ -30,7 +30,9 @@ from PIL import Image, ImageDraw, ImageFont
 from topics import TOPICS
 
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+GEMINI_MODEL = (os.environ.get("GEMINI_MODEL") or "gemini-flash-latest").strip()
+if GEMINI_MODEL.startswith("models/"):
+    GEMINI_MODEL = GEMINI_MODEL[len("models/"):]
 
 IST = timezone(timedelta(hours=5, minutes=30))
 TODAY = datetime.now(IST).strftime("%Y-%m-%d")
@@ -528,6 +530,7 @@ def build_captions(caption, hashtags):
 
 
 def main():
+    print(f"Using Gemini model: {GEMINI_MODEL}", file=sys.stderr)
     topic = random.choice(TOPICS)
     print(f"Researching topic: {topic}", file=sys.stderr)
     research = research_topic(topic)
