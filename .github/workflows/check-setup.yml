@@ -1,0 +1,47 @@
+name: Check setup (Telegram + Instagram diagnostics)
+
+# Run this manually from the Actions tab once, to verify all secrets are
+# correct and to find your real numeric Instagram Business Account ID.
+# It does NOT post anything - it only reads/prints information to the logs.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Telegram bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
+        run: |
+          echo "== getMe (bot identity) =="
+          curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" | python3 -m json.tool
+          echo "== getChat (does the bot see your channel?) =="
+          curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChat?chat_id=${TELEGRAM_CHAT}" | python3 -m json.tool
+
+      - name: Check Instagram token + find numeric Business Account ID
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+        run: |
+          echo "== Token debug (is it valid? what permissions?) =="
+          curl -s "https://graph.facebook.com/v21.0/debug_token?input_token=${IG_ACCESS_TOKEN}&access_token=${IG_ACCESS_TOKEN}" | python3 -m json.tool
+
+          echo "== Pages you manage =="
+          curl -s "https://graph.facebook.com/v21.0/me/accounts?access_token=${IG_ACCESS_TOKEN}" | python3 -m json.tool > /tmp/pages.json
+          cat /tmp/pages.json
+
+          echo "== For each page, the linked Instagram Business Account (this numeric id is what IG_BUSINESS_ID must be) =="
+          python3 - <<'EOF'
+          import json, subprocess, os
+          pages = json.load(open("/tmp/pages.json")).get("data", [])
+          token = os.environ["IG_ACCESS_TOKEN"]
+          for p in pages:
+              page_id = p["id"]
+              out = subprocess.run(
+                  ["curl", "-s", f"https://graph.facebook.com/v21.0/{page_id}?fields=name,instagram_business_account&access_token={token}"],
+                  capture_output=True, text=True,
+              ).stdout
+              print(f"Page: {p.get('name')} ({page_id}) ->", out)
+          EOF
