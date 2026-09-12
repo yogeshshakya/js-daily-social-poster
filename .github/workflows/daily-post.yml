@@ -32,6 +32,7 @@ jobs:
         working-directory: scripts
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
         run: python generate.py > /tmp/generate_output.txt; status=$?; cat /tmp/generate_output.txt; exit $status
 
       - name: Extract image filenames
