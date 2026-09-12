@@ -27,6 +27,32 @@ jobs:
                       print(m['name'])
           "
 
+      - name: List Gemini models that support IMAGE generation
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          curl -s "https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}" \
+            | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          if 'models' not in data:
+              print('ERROR response:', data)
+          else:
+              found = False
+              for m in data['models']:
+                  methods = m.get('supportedGenerationMethods', [])
+                  modalities = m.get('outputTokenLimit'), m.get('supportedOutputModalities', [])
+                  name = m['name']
+                  if 'generateContent' in methods and ('image' in name.lower() or 'IMAGE' in m.get('supportedOutputModalities', [])):
+                      print(name)
+                      found = True
+              if not found:
+                  print('No image-generation-capable models found for this API key/account.')
+                  print('The AI background feature (generate_daily_background in generate.py) will')
+                  print('automatically fall back to the procedural gradient background in this case -')
+                  print('this is expected and not an error.')
+          "
+
       - name: Check Telegram bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

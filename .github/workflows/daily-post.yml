@@ -33,6 +33,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          IMAGE_MODEL: ${{ secrets.IMAGE_MODEL }}
         run: python generate.py > /tmp/generate_output.txt; status=$?; cat /tmp/generate_output.txt; exit $status
 
       - name: Extract image filenames
@@ -51,6 +52,7 @@ jobs:
           for f in "${FILES[@]}"; do
             git add "images/$f"
           done
+          git add data/topic_history.json
           git commit -m "Daily carousel: ${{ steps.filenames.outputs.IMAGE_FILENAMES }}"
           git push
           echo "SHA=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
