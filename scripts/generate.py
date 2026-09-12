@@ -890,14 +890,17 @@ Produce a JSON object (ONLY JSON, no markdown fences) with this exact shape:
     }}
   ],
   "caption": "an SEO-friendly Instagram caption, 3-5 sentences: first
-    sentence is a scroll-stopping hook containing the main keyword (e.g.
-    'JavaScript closures', 'React re-renders'), then deliver real value in
-    plain language while naturally weaving in 2-3 high-search-volume,
-    evergreen keyword phrases developers actually search for around this
-    exact topic (e.g. 'javascript interview questions', 'react performance
-    optimization', 'nextjs best practices' - whichever genuinely fit this
-    topic, don't force unrelated ones), then a short call to action to
-    save/share/follow. Do NOT include hashtags in this field.",
+    sentence is a scroll-stopping hook naming the specific bug/topic, then
+    deliver real value in plain language, then a short call to action to
+    save/share/follow. Do NOT include hashtags in this field, and do not
+    list keywords in this field either - keywords go in seo_keywords below.",
+  "seo_keywords": [
+    "3 to 5 high-search-volume, evergreen keyword phrases developers
+     actually search for around this exact topic (e.g. 'javascript
+     interview questions', 'react performance optimization', 'nextjs best
+     practices' - whichever genuinely fit this topic, don't force unrelated
+     ones), as a flat array of short phrases, no # symbols"
+  ],
   "hashtags": [
     "10 to 15 hashtags as a flat array (include the # in each string), mixing:
      3-4 broad/high-volume (#JavaScript #WebDevelopment #Coding
@@ -936,25 +939,39 @@ summary)."""
     if not parsed.get("caption"):
         raise RuntimeError(f"Gemini response missing caption: {parsed}")
     parsed.setdefault("hashtags", [])
+    parsed.setdefault("seo_keywords", [])
     return parsed
 
 
 # ---------------------------------------------------------------------------
 # Caption assembly (Instagram: rich SEO caption; Telegram: shorter variant)
 # ---------------------------------------------------------------------------
-def build_captions(caption, hashtags):
+def build_captions(caption, seo_keywords, hashtags):
     hashtags = [h if h.startswith("#") else f"#{h}" for h in hashtags]
+    seo_line = "[" + ", ".join(seo_keywords) + "]" if seo_keywords else ""
 
-    # Instagram's app collapses consecutive plain blank lines, so the usual
-    # trick to get real visual separation before the hashtag block is a
-    # short stack of lines containing an invisible Braille-blank character
-    # (U+2800) instead of nothing.
-    ig_spacer = "\n" + "\n".join(["⠀"] * 4) + "\n"
-    ig = caption.strip() + ig_spacer + " ".join(hashtags[:15])
+    # Layout, both platforms: caption -> 2 line breaks -> [SEO keywords] ->
+    # 2 line breaks -> hashtags.
+    #
+    # Instagram's app collapses a plain blank line (no visible character on
+    # it), so the usual fix is to put an invisible Braille-blank character
+    # (U+2800) on that line instead of leaving it truly empty - it still
+    # reads as a blank line to the viewer but survives Instagram's collapsing.
+    ig_gap = "\n⠀\n"
+    ig_parts = [caption.strip()]
+    if seo_line:
+        ig_parts.append(seo_line)
+    ig_parts.append(" ".join(hashtags[:15]))
+    ig = ig_gap.join(ig_parts)
     ig = ig[:2200]
 
-    # Telegram doesn't collapse blank lines, so a plain double newline is enough.
-    tg = caption.strip() + "\n\n" + " ".join(hashtags[:5])
+    # Telegram doesn't collapse blank lines, so plain double newlines are enough.
+    tg_gap = "\n\n"
+    tg_parts = [caption.strip()]
+    if seo_line:
+        tg_parts.append(seo_line)
+    tg_parts.append(" ".join(hashtags[:5]))
+    tg = tg_gap.join(tg_parts)
     if len(tg) > 1024:
         tg = tg[:1000].rsplit(" ", 1)[0] + "…"
 
@@ -994,7 +1011,9 @@ def main():
         render_slide(slide, i, total, out_path)
         filenames.append(fname)
 
-    ig_caption, tg_caption = build_captions(carousel["caption"], carousel.get("hashtags", []))
+    ig_caption, tg_caption = build_captions(
+        carousel["caption"], carousel.get("seo_keywords", []), carousel.get("hashtags", [])
+    )
 
     with open(os.path.join(BUILD_DIR, "caption_instagram.txt"), "w", encoding="utf-8") as f:
         f.write(ig_caption + "\n")
