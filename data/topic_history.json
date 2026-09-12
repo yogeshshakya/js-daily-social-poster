@@ -1,1 +1,6 @@
-
+[
+  {
+    "date": "2026-09-12",
+    "topic": "Why mutating a ref's .current property during the render phase violates React's concurrent rendering model and causes unpredictable, hard-to-debug UI tearing"
+  }
+]
