@@ -31,9 +31,27 @@ from PIL import Image, ImageDraw, ImageFont
 from topics import TOPICS
 
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-GEMINI_MODEL = (os.environ.get("GEMINI_MODEL") or "gemini-flash-latest").strip()
-if GEMINI_MODEL.startswith("models/"):
-    GEMINI_MODEL = GEMINI_MODEL[len("models/"):]
+
+
+def _clean_model_name(name):
+    name = name.strip()
+    if name.startswith("models/"):
+        name = name[len("models/"):]
+    return name
+
+
+# Try the configured model first, then fall back through this list if it's
+# unavailable/overloaded - keeps a single busy model from blocking the whole
+# run. GEMINI_MODEL env var (if set) always goes first.
+_env_model = os.environ.get("GEMINI_MODEL")
+MODEL_CANDIDATES = []
+if _env_model:
+    MODEL_CANDIDATES.append(_clean_model_name(_env_model))
+for _fallback in ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"]:
+    if _fallback not in MODEL_CANDIDATES:
+        MODEL_CANDIDATES.append(_fallback)
+
+GEMINI_MODEL = MODEL_CANDIDATES[0]  # for logging only; actual calls try the whole list
 
 IST = timezone(timedelta(hours=5, minutes=30))
 TODAY = datetime.now(IST).strftime("%Y-%m-%d")
@@ -397,28 +415,41 @@ def render_slide(slide, index, total, out_path):
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
-def gemini_call(payload, max_retries=5):
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    )
-    delay = 20
-    for attempt in range(1, max_retries + 1):
-        resp = requests.post(url, json=payload, timeout=90)
-        if resp.status_code in RETRYABLE_STATUS_CODES and attempt < max_retries:
+def gemini_call(payload, retries_per_model=3):
+    last_status, last_body = None, ""
+    for model in MODEL_CANDIDATES:
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={GEMINI_API_KEY}"
+        )
+        delay = 15
+        for attempt in range(1, retries_per_model + 1):
+            resp = requests.post(url, json=payload, timeout=90)
+            if resp.ok:
+                if model != MODEL_CANDIDATES[0]:
+                    print(f"Gemini: succeeded using fallback model '{model}'.", file=sys.stderr)
+                return resp.json()
+
+            last_status, last_body = resp.status_code, resp.text[:500]
+            if resp.status_code in RETRYABLE_STATUS_CODES and attempt < retries_per_model:
+                print(
+                    f"Gemini model '{model}' returned {resp.status_code} (transient), "
+                    f"retrying in {delay}s (attempt {attempt}/{retries_per_model})...",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                delay = min(delay * 2, 90)
+                continue
+            # Out of retries for this model (or non-retryable error) - try the next model.
             print(
-                f"Gemini returned {resp.status_code} (transient), retrying in {delay}s "
-                f"(attempt {attempt}/{max_retries})...",
+                f"Gemini model '{model}' failed with {resp.status_code}, "
+                f"moving to next fallback model...",
                 file=sys.stderr,
             )
-            time.sleep(delay)
-            delay = min(delay * 2, 120)
-            continue
-        if not resp.ok:
-            raise RuntimeError(f"Gemini API error {resp.status_code}: {resp.text[:1000]}")
-        return resp.json()
+            break
+
     raise RuntimeError(
-        f"Gemini API kept failing with {resp.status_code} after all retries: {resp.text[:1000]}"
+        f"All Gemini models {MODEL_CANDIDATES} failed. Last error {last_status}: {last_body}"
     )
 
 
@@ -557,7 +588,7 @@ def build_captions(caption, hashtags):
 
 
 def main():
-    print(f"Using Gemini model: {GEMINI_MODEL}", file=sys.stderr)
+    print(f"Gemini model order (first available wins): {MODEL_CANDIDATES}", file=sys.stderr)
     topic = random.choice(TOPICS)
     print(f"Researching topic: {topic}", file=sys.stderr)
     research = research_topic(topic)
