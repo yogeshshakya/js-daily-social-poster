@@ -1,32 +1,106 @@
 # Daily JS/React/Next.js Poster
 
-Every day at 7:00 PM IST, this repo's GitHub Actions workflow:
+Every day at 7:00 AM IST, this repo's GitHub Actions workflow:
 
-1. Picks an **advanced, commonly-misunderstood** JS/React/Next.js topic
-   (see `scripts/topics.py`) - things experienced developers actually get
-   wrong, not textbook basics - and asks Gemini to **research it** (grounded
-   with Google Search, so facts stay current and accurate).
-2. Turns that research into a **4-slide carousel script**: a title/hook
-   slide, a "the buggy version" slide, a "the fix" slide, and a
-   takeaway/follow-CTA slide.
-3. Renders each slide as a 1080x1350 image on a **deep-blue gradient with a
-   circuit-pattern background**. The two middle slides use a **4-panel
-   infographic layout** (Code Input / Execution Flow / Console Output /
-   Internal Mechanics), matching a "before vs after" explainer format. The
-   title/thumbnail slide uses the bundled mascot (`assets/avatar.png`, with
-   its background auto-removed) - only that slide, as requested.
-4. Writes an SEO-style Instagram caption (hook + value + CTA) with a curated
-   mix of broad/niche/branded hashtags, plus a shorter Telegram-safe variant.
-5. Commits the images into `images/`.
+1. Asks Gemini to **pick today's own topic** (`choose_topic()` in
+   `scripts/generate.py`) within four subjects - JS latest features, JS
+   performance optimization, React internals/best practices, Next.js
+   internals/best practices - with instructions to keep it **advanced and
+   commonly-misunderstood** (things experienced developers actually get
+   wrong, not textbook basics), and to avoid repeating anything in
+   `data/topic_history.json` (the last ~30 topics posted, tracked
+   automatically). `scripts/topics.py` is kept only as a style-calibration
+   reference and as a **fallback pool** if the topic-selection call itself
+   fails for any reason. Gemini then **researches** the chosen topic
+   (written from the model's own knowledge; Google Search grounding is not
+   used since it isn't available on free-tier API keys - see the note in
+   `scripts/generate.py`'s `research_topic()`).
+2. Turns that research into an **8-slide carousel script** following a full
+   narrative arc: title/hook -> the problem -> why it happens -> the fix ->
+   how the fix works -> real-world impact -> a related pro tip ->
+   takeaway/follow-CTA.
+3. Renders each slide as a 1080x1350 image on a **deep-blue background**.
+   The base texture is generated fresh each day by asking a Gemini
+   image-generation model to produce an abstract navy/circuit-pattern
+   texture in the style of `assets/bg_reference.jpg` (best-effort - see
+   "AI background generation" below); the same hand-drawn circuit-line/node
+   overlay is then drawn on top either way, so every slide still looks
+   consistent even when AI generation isn't available. The 6 middle slides
+   use a **4-panel infographic layout** with small connector-arrow icons
+   between panels so the grid reads as one flow rather than four separate
+   boxes, plus a small role icon (bug/warning/idea/clock/chart/star) next to
+   each slide's heading; panel titles/content adapt to what each slide is
+   actually showing (code input/output, step lists, scenario/impact, etc).
+   The title/thumbnail slide uses the bundled mascot (`assets/avatar.png`,
+   background auto-removed) with a speech bubble "saying" a short hook line,
+   plus an "ADVANCED" difficulty badge - only that slide has the mascot, as
+   requested.
+4. Writes an SEO-style Instagram caption (hook + value + 2-3 evergreen
+   high-search-volume keyword phrases + CTA) with a curated mix of
+   broad/niche/community/branded hashtags (10-15 tags), separated from the
+   caption body by a forced blank-line gap (Instagram normally collapses
+   plain blank lines, so this uses invisible Braille-blank characters to
+   keep the spacing visible), plus a shorter Telegram-safe variant.
+5. Commits the images into `images/`, and appends today's topic to
+   `data/topic_history.json` (used to avoid repeats - see below).
 6. Posts the full carousel + caption to your Telegram channel (as an album)
    and your Instagram Business account (as a carousel post).
+
+**Note:** the GitHub repo needs to be **public** for this to work - Instagram
+fetches each image from its public `raw.githubusercontent.com` URL, and a
+private repo's raw URLs require authentication that Instagram can't provide.
 
 It runs entirely on GitHub's servers, so it does not depend on your laptop
 being on. To change the tone, topic pool, slide count, color theme, or
 hashtag mix, edit `scripts/topics.py` and the prompt/theme constants in
 `scripts/generate.py`. To change the mascot, replace `assets/avatar.png`
 with any image that has a plain white/light background (it gets silhouetted
-automatically).
+automatically). To change the background style reference, replace
+`assets/bg_reference.jpg` with a different image.
+
+### Topic selection (Gemini picks it, not a fixed list)
+
+`choose_topic()` in `scripts/generate.py` asks Gemini to pick a specific,
+advanced, narrow topic each day within four subjects (JS latest features,
+JS performance optimization, React best practices, Next.js best practices).
+It's given `scripts/topics.py`'s entries only as style/depth examples (how
+narrow and advanced the topic should be), not as the pool it must choose
+from - so topics can be genuinely new day to day, not limited to 20 fixed
+entries.
+
+To avoid repeats, every topic actually posted is appended to
+`data/topic_history.json` (kept to the last ~30), and that list is sent back
+to Gemini each day with instructions to pick something meaningfully
+different. If the topic-selection call itself fails (network/quota issues),
+the script falls back to randomly picking from the local `scripts/topics.py`
+pool instead, so a post never fails purely because of this step - check the
+logs for `Gemini topic selection failed (...); falling back to local topic
+pool` to see if that happened.
+
+### AI background generation (best-effort)
+
+Each run asks a Gemini **image-generation** model (`generate_daily_background()`
+in `scripts/generate.py`) to create today's base background texture, using
+`assets/bg_reference.jpg` as a style reference. This is genuinely
+best-effort:
+
+- It tries several candidate model names in order (`gemini-2.5-flash-image`,
+  `gemini-3-pro-image`, and a couple of older preview names), the same
+  fallback pattern used for the text-generation models.
+- Not every Google account/API key has access to an image-generation model
+  yet (this is a newer, still-rolling-out capability, similar to how Search
+  grounding turned out to need a paid tier). If none of the candidates work,
+  the script **automatically falls back** to the original procedural
+  gradient + hand-drawn circuit pattern - posting still succeeds, it just
+  uses the procedural background instead of an AI one that day.
+- Check the Action run's logs for lines starting with `AI background:` to
+  see whether it succeeded (`generated successfully with '<model>'`) or
+  fell back (`all candidate models failed, using procedural gradient
+  instead`).
+- You can pin a specific image model with an optional `IMAGE_MODEL` repo
+  secret (same idea as `GEMINI_MODEL`). Run the **"Check setup"** workflow
+  (see below) to see which image-generation models, if any, your API key
+  currently has access to.
 
 ## One-time setup
 
@@ -45,6 +119,8 @@ repository secret**, and add each of these:
 | `TELEGRAM_CHAT` | `@modernjavascripthub` (or your channel's numeric id) |
 | `IG_ACCESS_TOKEN` | your long-lived Instagram Graph API access token |
 | `IG_BUSINESS_ID` | see step 3 below - must be the **numeric** ID |
+| `GEMINI_MODEL` *(optional)* | pin a specific text-generation model instead of the automatic fallback list |
+| `IMAGE_MODEL` *(optional)* | pin a specific image-generation model instead of the automatic fallback list |
 
 ### 3. Find your real numeric Instagram Business Account ID
 Go to the **Actions** tab -> **"Check setup (Telegram + Instagram
@@ -63,7 +139,7 @@ actually posting anything.
 
 ### 4. Enable the daily schedule
 Nothing else to do - the `daily-post.yml` workflow is already scheduled for
-13:30 UTC (7:00 PM IST) every day once the file is on the `main` branch.
+01:30 UTC (7:00 AM IST) every day once the file is on the `main` branch.
 GitHub disables scheduled workflows on repos with no activity for 60+ days,
 so if it stops firing after a long pause, just push any small commit or
 re-enable it from the Actions tab.
