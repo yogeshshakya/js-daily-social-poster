@@ -1,26 +1,27 @@
-"""Seed topic pool. The script picks one at random each run and asks Gemini
-to write fresh content around it, so posts stay varied even though the
-underlying subject areas repeat over weeks/months."""
+"""Seed topic pool. Deliberately ADVANCED / commonly-misunderstood angles,
+not textbook-basic ones - things intermediate+ developers frequently get
+wrong in real code. The script picks one at random each run and asks Gemini
+to research that specific angle, so posts stay varied but never trivial."""
 
 TOPICS = [
-    "Latest JavaScript language feature (ES2024/ES2025) developers should know",
-    "A common JavaScript performance mistake and how to fix it",
-    "How the JavaScript event loop / microtask queue actually works",
-    "A useful but underused native JavaScript array/object method",
-    "Memory leaks in JavaScript closures and how to avoid them",
-    "Debouncing vs throttling in JavaScript - when to use which",
-    "React re-render optimization (memo, useMemo, useCallback) done right",
-    "A React hooks mistake beginners make and the correct pattern",
-    "React Server Components vs Client Components - practical guidance",
-    "State management in React in 2026 - when you do (and don't) need a library",
-    "React performance profiling with the React DevTools Profiler",
-    "Next.js App Router data fetching best practices",
-    "Next.js caching model (fetch cache, route cache, full route cache) explained simply",
-    "Next.js image and font optimization best practices",
-    "Choosing between Server Actions and API routes in Next.js",
-    "Improving Core Web Vitals (LCP/INP/CLS) in a React/Next.js app",
-    "Bundle size optimization tips for modern JS/React/Next.js apps",
-    "TypeScript tips that make React/Next.js code safer",
-    "Common anti-patterns in useEffect and cleaner alternatives",
-    "Edge runtime vs Node.js runtime in Next.js - practical differences",
+    "Why `var` inside a for-loop with setTimeout logs the wrong value, and exactly how `let` fixes it (per-iteration binding)",
+    "Why array.sort() mutates the original array and silently breaks code that assumed it was pure",
+    "The classic stale closure bug inside useEffect/useState and why the dependency array doesn't always save you",
+    "Why comparing objects/arrays with === almost always returns false, and what developers get wrong trying to 'fix' it",
+    "Why async/await inside a forEach loop does not run sequentially, even though it looks like it should",
+    "How JavaScript's microtask queue can starve the macrotask queue and freeze UI updates without any infinite loop",
+    "Why React state updates inside the same event handler don't reflect immediately, and how batching actually works in React 18",
+    "Why passing a new inline object/array as a prop breaks React.memo even when the data is 'the same'",
+    "The useEffect cleanup race condition when a fetch resolves after the component has already unmounted or props changed",
+    "Why keys in a React list should never be the array index when items can reorder, insert, or delete",
+    "How Next.js request memoization and the Data Cache can silently serve stale data across requests if you don't understand fetch caching rules",
+    "Why a 'use client' component can still accidentally run server-only code and leak secrets to the browser",
+    "Why Next.js Server Actions can be called by anyone if you don't treat them like public API endpoints",
+    "The difference between structuredClone, JSON.parse(JSON.stringify()), and a spread copy - and where each one silently fails",
+    "Why event listeners added in useEffect without cleanup cause memory leaks that don't show up until the app has run for a while",
+    "Why `this` inside a regular function passed as a callback loses its binding, and why arrow functions aren't always the fix",
+    "Why floating point math in JavaScript makes 0.1 + 0.2 !== 0.3, and the correct way to compare/round currency values",
+    "How prototype chain lookups can silently shadow properties and cause bugs that only appear with certain input objects",
+    "Why debounced/throttled functions defined inside a React component body get recreated every render and stop working as expected",
+    "Why a Promise.all() call fails entirely if just one promise rejects, and when Promise.allSettled is the correct choice instead",
 ]
