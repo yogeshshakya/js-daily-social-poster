@@ -394,6 +394,9 @@ def render_slide(slide, index, total, out_path):
 # ---------------------------------------------------------------------------
 # Gemini calls: research -> structured carousel script
 # ---------------------------------------------------------------------------
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
 def gemini_call(payload, max_retries=5):
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
@@ -402,9 +405,9 @@ def gemini_call(payload, max_retries=5):
     delay = 20
     for attempt in range(1, max_retries + 1):
         resp = requests.post(url, json=payload, timeout=90)
-        if resp.status_code == 429 and attempt < max_retries:
+        if resp.status_code in RETRYABLE_STATUS_CODES and attempt < max_retries:
             print(
-                f"Gemini rate-limited (429), retrying in {delay}s "
+                f"Gemini returned {resp.status_code} (transient), retrying in {delay}s "
                 f"(attempt {attempt}/{max_retries})...",
                 file=sys.stderr,
             )
@@ -414,7 +417,9 @@ def gemini_call(payload, max_retries=5):
         if not resp.ok:
             raise RuntimeError(f"Gemini API error {resp.status_code}: {resp.text[:1000]}")
         return resp.json()
-    raise RuntimeError(f"Gemini API kept returning 429 (rate limited) after all retries: {resp.text[:1000]}")
+    raise RuntimeError(
+        f"Gemini API kept failing with {resp.status_code} after all retries: {resp.text[:1000]}"
+    )
 
 
 def research_topic(topic):
