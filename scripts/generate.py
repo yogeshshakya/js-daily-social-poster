@@ -22,6 +22,7 @@ import os
 import random
 import re
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 
 import requests
@@ -393,14 +394,26 @@ def render_slide(slide, index, total, out_path):
 # ---------------------------------------------------------------------------
 # Gemini calls: research -> structured carousel script
 # ---------------------------------------------------------------------------
-def gemini_call(payload):
+def gemini_call(payload, max_retries=5):
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
         f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     )
-    resp = requests.post(url, json=payload, timeout=90)
-    resp.raise_for_status()
-    return resp.json()
+    delay = 20
+    for attempt in range(1, max_retries + 1):
+        resp = requests.post(url, json=payload, timeout=90)
+        if resp.status_code == 429 and attempt < max_retries:
+            print(
+                f"Gemini rate-limited (429), retrying in {delay}s "
+                f"(attempt {attempt}/{max_retries})...",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 120)
+            continue
+        resp.raise_for_status()
+        return resp.json()
+    raise RuntimeError("Gemini API kept returning 429 (rate limited) after all retries.")
 
 
 def research_topic(topic):
