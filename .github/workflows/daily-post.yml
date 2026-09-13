@@ -34,6 +34,9 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           IMAGE_MODEL: ${{ secrets.IMAGE_MODEL }}
+          # "ai" (default) = image model lays out whole slides; set this secret
+          # to "procedural" to force the always-reliable PIL renderer instead.
+          SLIDE_IMAGE_MODE: ${{ secrets.SLIDE_IMAGE_MODE }}
         run: python generate.py > /tmp/generate_output.txt; status=$?; cat /tmp/generate_output.txt; exit $status
 
       - name: Extract image filenames
