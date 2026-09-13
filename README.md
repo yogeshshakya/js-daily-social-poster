@@ -61,6 +61,33 @@ with any image that has a plain white/light background (it gets silhouetted
 automatically). To change the background style reference, replace
 `assets/bg_reference.jpg` with a different image.
 
+### Posting to a Facebook Page (optional)
+
+Telegram and Instagram post by default. To also post to a Facebook Page, set
+the `FB_PAGE_ID` and `FB_PAGE_TOKEN` secrets; if either is missing the
+Facebook step is skipped quietly and nothing else changes.
+
+Facebook has no carousel object for Page posts. The equivalent is a
+multi-photo post, so `post_to_facebook()` uploads each slide to
+`/{page-id}/photos` with `published=false`, then attaches all of the returned
+`media_fbid`s to one `/{page-id}/feed` post carrying the Instagram caption.
+The result is a single post with all 8 slides in it.
+
+Two things this needs that Instagram posting does not:
+
+1. **A Page access token, not your user token.** Get it from Graph API
+   Explorer: select your app, generate a user token with the
+   `pages_manage_posts` and `pages_read_engagement` permissions, then switch
+   the token dropdown from your user to the Page itself, generate again, and
+   copy that value into `FB_PAGE_TOKEN`. A Page token derived from a
+   long-lived user token is long-lived too.
+2. **The `pages_manage_posts` permission.** Without it the upload fails with
+   a permissions error in the Action log; nothing else breaks.
+
+Run the **"Check setup"** workflow after adding the secrets - it now reports
+whether both are present, what the token's type and scopes are, and when it
+expires.
+
 ### Topic selection (Gemini picks it, not a fixed list)
 
 `choose_topic()` in `scripts/generate.py` asks Gemini to pick a specific,
@@ -193,6 +220,8 @@ repository secret**, and add each of these:
 | `GEMINI_MODEL` *(optional)* | pin a specific text-generation model instead of the automatic fallback list |
 | `IMAGE_MODEL` *(optional)* | pin a specific image-generation model instead of the automatic fallback list |
 | `SLIDE_IMAGE_MODE` *(optional)* | `ai` (default) or `procedural` - see "Slide rendering" below |
+| `FB_PAGE_ID` *(optional)* | numeric Facebook Page ID - set with the next one to also post to Facebook |
+| `FB_PAGE_TOKEN` *(optional)* | that Page's own access token (not your user token) |
 
 ### 3. Find your real numeric Instagram Business Account ID
 Go to the **Actions** tab -> **"Check setup (Telegram + Instagram
