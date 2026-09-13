@@ -14,5 +14,9 @@
   {
     "date": "2026-09-13",
     "topic": "Why an unused large variable leaks memory in JavaScript when an adjacent closure in the same lexical scope is retained, due to how V8 shares closure contexts across functions"
+  },
+  {
+    "date": "2026-09-13",
+    "topic": "Why pre-allocating arrays with 'new Array(size)' or manually resizing them via 'length' transitions V8 to 'holey' element kinds, permanently degrading iteration performance compared to packed arrays"
   }
 ]
