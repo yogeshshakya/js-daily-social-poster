@@ -943,6 +943,35 @@ def draw_code_line(draw, x, y, line, font):
         x += draw.textlength(token, font=font)
 
 
+NEGATIVE_HINTS = (
+    "slow", "slower", "leak", "leaked", "crash", "break", "breaks", "broken",
+    "fail", "fails", "bug", "incident", "error", "problem", "worse", "lost",
+    "stale", "wrong", "deopt", "blocked", "stuck", "hang", "freeze", "climbs",
+    "grows", "retain", "retains", "spike", "drop", "drops", "never", "can't",
+    "cannot", "unexpected", "wasted", "dict mode", "evict",
+)
+
+
+def is_negative(text):
+    """Rough sentiment check so failures don't get a cheerful green tick."""
+    t = str(text).lower()
+    return any(hint in t for hint in NEGATIVE_HINTS)
+
+
+def draw_cross_badge(draw, cx, cy, r=16, fill=ALERT_RED):
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill)
+    d = r * 0.42
+    draw.line([(cx - d, cy - d), (cx + d, cy + d)], fill=(26, 8, 8), width=max(3, int(r / 5)))
+    draw.line([(cx - d, cy + d), (cx + d, cy - d)], fill=(26, 8, 8), width=max(3, int(r / 5)))
+
+
+def draw_status_badge(draw, cx, cy, r, negative):
+    if negative:
+        draw_cross_badge(draw, cx, cy, r=r)
+    else:
+        draw_check_badge(draw, cx, cy, r=r)
+
+
 def draw_down_arrow(draw, cx, y0, y1, color=ACCENT):
     draw.line([(cx, y0), (cx, y1 - 5)], fill=color, width=3)
     draw.polygon([(cx - 6, y1 - 7), (cx + 6, y1 - 7), (cx, y1 + 1)], fill=color)
@@ -1067,9 +1096,11 @@ def render_panel(draw, x, y, w, h, panel):
         item_h = int(42 * s)
         r = max(8, int(12 * s))
         for line in lines:
+            neg = is_negative(line)
+            tint = ALERT_RED if neg else ACCENT
             draw.rounded_rectangle([content_x, cy, x + w - pad, cy + item_h - int(8 * s)],
-                                   radius=10, fill=blend(PANEL_BG, ACCENT, 0.07))
-            draw_check_badge(draw, content_x + r + 8, cy + (item_h - int(8 * s)) // 2, r=r)
+                                   radius=10, fill=blend(PANEL_BG, tint, 0.09))
+            draw_status_badge(draw, content_x + r + 8, cy + (item_h - int(8 * s)) // 2, r, neg)
             draw.text((content_x + 2 * r + 20, cy + int(7 * s)), line, font=line_font, fill=WHITE)
             cy += item_h
 
@@ -1081,8 +1112,13 @@ def render_panel(draw, x, y, w, h, panel):
         arrow_h = int(26 * s)
         for i, wrapped in enumerate(wrapped_all):
             last = i == len(wrapped_all) - 1
-            chip_fill = blend(PANEL_BG, CHECK_GREEN, 0.16) if last else blend(PANEL_BG, ACCENT, 0.18)
-            chip_edge = CHECK_GREEN if last else ACCENT
+            neg = is_negative(" ".join(wrapped))
+            if last:
+                tone = ALERT_RED if neg else CHECK_GREEN
+            else:
+                tone = ALERT_RED if neg else ACCENT
+            chip_fill = blend(PANEL_BG, tone, 0.17)
+            chip_edge = tone
             draw.rounded_rectangle([content_x, cy, x + w - pad, cy + chip_h], radius=12,
                                    fill=chip_fill, outline=chip_edge, width=2)
             ty = cy + (chip_h - len(wrapped) * line_h) / 2
@@ -1097,14 +1133,16 @@ def render_panel(draw, x, y, w, h, panel):
 
     if result:
         rf = fonts["res"]
+        neg = is_negative(result)
+        tone = ALERT_RED if neg else CHECK_GREEN
         badge_w = draw.textlength(result, font=rf) + int(52 * s)
         bh = int(34 * s)
         by = min(cy + int(8 * s), y + h - bh - 10)
         bx = x + (w - badge_w) / 2
         draw.rounded_rectangle([bx, by, bx + badge_w, by + bh], radius=bh / 2,
-                               fill=blend(PANEL_BG, CHECK_GREEN, 0.22), outline=CHECK_GREEN, width=2)
-        draw_check_badge(draw, bx + int(19 * s), by + bh / 2, r=max(8, int(11 * s)))
-        draw.text((bx + int(36 * s), by + (bh - int(22 * s)) / 2), result, font=rf, fill=CHECK_GREEN)
+                               fill=blend(PANEL_BG, tone, 0.22), outline=tone, width=2)
+        draw_status_badge(draw, bx + int(19 * s), by + bh / 2, max(8, int(11 * s)), neg)
+        draw.text((bx + int(36 * s), by + (bh - int(22 * s)) / 2), result, font=rf, fill=tone)
 
 
 def draw_series_banner(draw, cy, text="JAVASCRIPT DEEP DIVE SERIES"):
