@@ -85,6 +85,9 @@ jobs:
           TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
           IG_BUSINESS_ID: ${{ secrets.IG_BUSINESS_ID }}
+          # Optional: set both to also post to a Facebook Page
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           IMAGE_PATHS: ${{ steps.urls.outputs.IMAGE_PATHS }}
           RAW_IMAGE_URLS: ${{ steps.urls.outputs.RAW_IMAGE_URLS }}
           CAPTION_FILE_INSTAGRAM: build/caption_instagram.txt

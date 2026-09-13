@@ -66,15 +66,25 @@ jobs:
       - name: Check Instagram token + find numeric Business Account ID
         env:
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
         run: |
           echo "== Token debug (is it valid? what permissions?) =="
           curl -s "https://graph.facebook.com/v21.0/debug_token?input_token=${IG_ACCESS_TOKEN}&access_token=${IG_ACCESS_TOKEN}" | python3 -m json.tool
 
-          echo "== Pages you manage =="
-          curl -s "https://graph.facebook.com/v21.0/me/accounts?access_token=${IG_ACCESS_TOKEN}" | python3 -m json.tool > /tmp/pages.json
-          cat /tmp/pages.json
+          echo "== Pages you manage (page access tokens are REDACTED - this log is public on a public repo) =="
+          curl -s "https://graph.facebook.com/v21.0/me/accounts?access_token=${IG_ACCESS_TOKEN}" > /tmp/pages.json
+          python3 - <<'EOF'
+          import json
+          data = json.load(open("/tmp/pages.json"))
+          for p in data.get("data", []):
+              tok = p.get("access_token")
+              print(f"Page: {p.get('name')}  id={p.get('id')}  page_token={'present (hidden)' if tok else 'MISSING'}")
+          if "data" not in data:
+              print("ERROR response:", json.dumps(data)[:400])
+          EOF
 
-          echo "== For each page, the linked Instagram Business Account (this numeric id is what IG_BUSINESS_ID must be) =="
+          echo "== For each page: linked Instagram Business Account (this numeric id is what IG_BUSINESS_ID must be) =="
           python3 - <<'EOF'
           import json, subprocess, os
           pages = json.load(open("/tmp/pages.json")).get("data", [])
@@ -87,3 +97,20 @@ jobs:
               ).stdout
               print(f"Page: {p.get('name')} ({page_id}) ->", out)
           EOF
+
+          echo "== Facebook Page posting readiness =="
+          echo "FB_PAGE_ID secret set:    ${FB_PAGE_ID:+yes}${FB_PAGE_ID:-NO (Facebook posting will be skipped)}"
+          echo "FB_PAGE_TOKEN secret set: ${FB_PAGE_TOKEN:+yes}${FB_PAGE_TOKEN:-NO (Facebook posting will be skipped)}"
+          if [ -n "$FB_PAGE_ID" ] && [ -n "$FB_PAGE_TOKEN" ]; then
+            echo "-- checking the page token can publish (needs pages_manage_posts) --"
+            curl -s "https://graph.facebook.com/v21.0/${FB_PAGE_ID}?fields=name&access_token=${FB_PAGE_TOKEN}" | python3 -m json.tool
+            curl -s "https://graph.facebook.com/v21.0/debug_token?input_token=${FB_PAGE_TOKEN}&access_token=${IG_ACCESS_TOKEN}" \
+              | python3 -c "
+          import json,sys
+          d = json.load(sys.stdin).get('data', {})
+          print('token type :', d.get('type'))
+          print('page id    :', d.get('profile_id') or d.get('user_id'))
+          print('expires_at :', d.get('expires_at'))
+          print('scopes     :', ', '.join(d.get('scopes', [])))
+          "
+          fi
