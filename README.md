@@ -68,6 +68,14 @@ narrow and advanced the topic should be), not as the pool it must choose
 from - so topics can be genuinely new day to day, not limited to 20 fixed
 entries.
 
+The prompt asks it to alternate between two flavours: (a) a
+commonly-misunderstood behavior or bug, and (b) something new or recently
+changed in the ecosystem that experienced developers still get wrong.
+Since Google Search grounding isn't used (paid-tier only), flavour (b) comes
+from the model's own training knowledge rather than live news, so the prompt
+explicitly tells it to fall back to flavour (a) rather than guess about any
+release or API it isn't confident about.
+
 To avoid repeats, every topic actually posted is appended to
 `data/topic_history.json` (kept to the last ~30), and that list is sent back
 to Gemini each day with instructions to pick something meaningfully
@@ -76,6 +84,31 @@ the script falls back to randomly picking from the local `scripts/topics.py`
 pool instead, so a post never fails purely because of this step - check the
 logs for `Gemini topic selection failed (...); falling back to local topic
 pool` to see if that happened.
+
+### Slide rendering: AI-generated slides, with a procedural safety net
+
+`SLIDE_IMAGE_MODE` (env var / optional repo secret) controls how each slide
+is drawn:
+
+- **`ai` (default)** - the image model is handed `assets/bg_reference.jpg`
+  (and, for the cover slide, `assets/avatar.png`) plus the exact text that
+  must appear, and asked to lay out the whole slide itself: same reference
+  background, infographic panels, icons, flow arrows. This gives much richer
+  visuals than the procedural renderer can.
+- **`procedural`** - skip AI entirely and draw every slide with PIL, which
+  always works and renders text perfectly.
+
+Important honest caveat: image-generation models are **not reliable at
+rendering exact text**, especially code. Some slides may come back with
+misspelled words, garbled code, or invented text. Every slide therefore falls
+back to the procedural renderer automatically if generation fails, and the
+logs show which path each slide took (`AI slide 3/8: generated successfully
+with '<model>'` vs `AI slide 3/8: falling back to the procedural renderer`).
+If you find the AI slides' text too unreliable in practice, set the
+`SLIDE_IMAGE_MODE` secret to `procedural` - no code change needed.
+
+Note this makes 8 image-generation calls per run instead of 1, so it uses
+noticeably more of your Gemini quota than the background-only mode did.
 
 ### AI background generation (best-effort)
 
@@ -121,6 +154,7 @@ repository secret**, and add each of these:
 | `IG_BUSINESS_ID` | see step 3 below - must be the **numeric** ID |
 | `GEMINI_MODEL` *(optional)* | pin a specific text-generation model instead of the automatic fallback list |
 | `IMAGE_MODEL` *(optional)* | pin a specific image-generation model instead of the automatic fallback list |
+| `SLIDE_IMAGE_MODE` *(optional)* | `ai` (default) or `procedural` - see "Slide rendering" below |
 
 ### 3. Find your real numeric Instagram Business Account ID
 Go to the **Actions** tab -> **"Check setup (Telegram + Instagram
