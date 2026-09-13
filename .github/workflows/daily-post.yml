@@ -37,6 +37,9 @@ jobs:
           # "ai" (default) = image model lays out whole slides; set this secret
           # to "procedural" to force the always-reliable PIL renderer instead.
           SLIDE_IMAGE_MODE: ${{ secrets.SLIDE_IMAGE_MODE }}
+          # "on" (default) = let the image model redraw the mascot in a pose;
+          # set this secret to "off" to always use assets/avatar.png as-is.
+          AVATAR_POSE_MODE: ${{ secrets.AVATAR_POSE_MODE }}
         run: python generate.py > /tmp/generate_output.txt; status=$?; cat /tmp/generate_output.txt; exit $status
 
       - name: Extract image filenames
@@ -56,6 +59,8 @@ jobs:
             git add "images/$f"
           done
           git add data/topic_history.json
+          # newly generated mascot poses, so they're generated once and reused
+          if [ -d assets/avatar_poses ]; then git add assets/avatar_poses; fi
           git commit -m "Daily carousel: ${{ steps.filenames.outputs.IMAGE_FILENAMES }}"
           git push
           echo "SHA=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
