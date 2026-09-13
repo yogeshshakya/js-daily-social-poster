@@ -6,6 +6,10 @@ Expects these environment variables:
   TELEGRAM_CHAT            e.g. @modernjavascripthub or a numeric chat id
   IG_ACCESS_TOKEN          long-lived Instagram Graph API access token
   IG_BUSINESS_ID           numeric Instagram Business Account ID
+  FB_PAGE_ID               (optional) numeric Facebook Page ID
+  FB_PAGE_TOKEN            (optional) that Page's own access token
+                            - both must be set for Facebook posting; if either
+                              is missing the Facebook step is skipped quietly
   IMAGE_PATHS              comma-separated local paths, in slide order
   RAW_IMAGE_URLS           comma-separated public URLs (same order), for
                             Instagram which requires a hosted image_url
@@ -24,6 +28,8 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT = os.environ["TELEGRAM_CHAT"]
 IG_ACCESS_TOKEN = os.environ["IG_ACCESS_TOKEN"]
 IG_BUSINESS_ID = os.environ["IG_BUSINESS_ID"]
+FB_PAGE_ID = (os.environ.get("FB_PAGE_ID") or "").strip()
+FB_PAGE_TOKEN = (os.environ.get("FB_PAGE_TOKEN") or "").strip()
 IMAGE_PATHS = [p for p in os.environ["IMAGE_PATHS"].split(",") if p]
 RAW_IMAGE_URLS = [u for u in os.environ["RAW_IMAGE_URLS"].split(",") if u]
 CAPTION_FILE_INSTAGRAM = os.environ["CAPTION_FILE_INSTAGRAM"]
@@ -165,6 +171,62 @@ def post_to_instagram(caption):
     return publish_body
 
 
+def post_to_facebook(caption):
+    """Post the same images to a Facebook Page.
+
+    Facebook has no 'carousel' object for page posts: the equivalent is a
+    multi-photo post, built by uploading each photo UNPUBLISHED to /photos and
+    then attaching all of their media_fbids to a single /feed post.
+    """
+    if not FB_PAGE_ID or not FB_PAGE_TOKEN:
+        print(
+            "Facebook: FB_PAGE_ID / FB_PAGE_TOKEN not set - skipping Facebook.",
+            file=sys.stderr,
+        )
+        return None
+
+    base = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{FB_PAGE_ID}"
+
+    if len(RAW_IMAGE_URLS) == 1:
+        resp = requests.post(
+            f"{base}/photos",
+            data={"url": RAW_IMAGE_URLS[0], "caption": caption, "access_token": FB_PAGE_TOKEN},
+            timeout=60,
+        )
+        body = resp.json()
+        if not resp.ok or "id" not in body:
+            raise RuntimeError(f"Facebook photo post failed: {resp.status_code} {body}")
+        print(f"Facebook: posted single photo {body['id']}", file=sys.stderr)
+        return body
+
+    media_ids = []
+    for url in RAW_IMAGE_URLS:
+        resp = requests.post(
+            f"{base}/photos",
+            data={"url": url, "published": "false", "access_token": FB_PAGE_TOKEN},
+            timeout=60,
+        )
+        body = resp.json()
+        if not resp.ok or "id" not in body:
+            raise RuntimeError(
+                f"Facebook photo upload failed for {url}: {resp.status_code} {body}"
+            )
+        media_ids.append(body["id"])
+        print(f"Facebook: uploaded unpublished photo {body['id']}", file=sys.stderr)
+
+    data = {"message": caption, "access_token": FB_PAGE_TOKEN}
+    for i, media_id in enumerate(media_ids):
+        # documented form: attached_media[0]={"media_fbid":"..."}
+        data[f"attached_media[{i}]"] = json.dumps({"media_fbid": media_id})
+
+    resp = requests.post(f"{base}/feed", data=data, timeout=120)
+    body = resp.json()
+    if not resp.ok or "id" not in body:
+        raise RuntimeError(f"Facebook feed post failed: {resp.status_code} {body}")
+    print(f"Facebook: published {len(media_ids)}-photo post {body['id']}", file=sys.stderr)
+    return body
+
+
 def main():
     if len(IMAGE_PATHS) != len(RAW_IMAGE_URLS):
         raise SystemExit("IMAGE_PATHS and RAW_IMAGE_URLS must have the same number of entries.")
@@ -184,6 +246,12 @@ def main():
     except Exception as e:
         errors.append(f"Instagram error: {e}")
         print(f"Instagram error: {e}", file=sys.stderr)
+
+    try:
+        post_to_facebook(ig_caption)
+    except Exception as e:
+        errors.append(f"Facebook error: {e}")
+        print(f"Facebook error: {e}", file=sys.stderr)
 
     if errors:
         raise SystemExit("\n".join(errors))
