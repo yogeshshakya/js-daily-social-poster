@@ -31,10 +31,13 @@ Every day at 7:00 AM IST, this repo's GitHub Actions workflow:
    boxes, plus a small role icon (bug/warning/idea/clock/chart/star) next to
    each slide's heading; panel titles/content adapt to what each slide is
    actually showing (code input/output, step lists, scenario/impact, etc).
-   The title/thumbnail slide uses the bundled mascot (`assets/avatar.png`,
-   background auto-removed) with a speech bubble "saying" a short hook line,
-   plus an "ADVANCED" difficulty badge - only that slide has the mascot, as
-   requested.
+   The title/thumbnail slide is built as a proper cover: a red warning
+   banner, an amber headline, the bundled mascot (`assets/avatar.png`,
+   background auto-removed) standing on the right under a soft spotlight
+   with a speech bubble beside his head (tail pointing at his face) where he
+   talks to the viewer, a curved pointer leading down to a red/green
+   before-after comparison of the wrong vs right approach, and an "ADVANCED"
+   difficulty badge. Only that slide has the mascot, as requested.
 4. Writes an SEO-style Instagram caption (hook + value + 2-3 evergreen
    high-search-volume keyword phrases + CTA) with a curated mix of
    broad/niche/community/branded hashtags (10-15 tags), separated from the
@@ -109,6 +112,41 @@ If you find the AI slides' text too unreliable in practice, set the
 
 Note this makes 8 image-generation calls per run instead of 1, so it uses
 noticeably more of your Gemini quota than the background-only mode did.
+
+### Mascot poses (generated once, then cached)
+
+The bundled `assets/avatar.png` is a single static image, so his pose and
+expression can't be changed in code. Instead, `get_avatar_pose()` asks the
+image model to redraw that same character in a given pose (currently
+`pointing`, used on the cover so he looks like he is presenting the
+comparison cards, plus `excited` and `thinking` defined for future use),
+keeping the same face, clothes and art style, on a plain white background
+that the existing cutout code silhouettes.
+
+The result is written to `assets/avatar_poses/<pose>.png` and committed by
+the workflow, so **each pose is generated only once** - every later run just
+loads the cached file. If image generation isn't available on your account,
+the code silently falls back to the original `assets/avatar.png` and logs
+`Avatar pose '<pose>': unavailable, using the original avatar.`
+
+**If the generated character doesn't look like your mascot** (identity drift
+is the common failure of image-to-image editing), you have three options, in
+order of reliability:
+
+1. **Supply the pose yourself** - put your own PNG at
+   `assets/avatar_poses/pointing.png` (plain white background, full body).
+   A file that already exists is never regenerated, so this always wins.
+2. **Re-roll** - delete `assets/avatar_poses/pointing.png` and re-run the
+   workflow; each generation is a fresh draw, so a second or third try often
+   lands much closer.
+3. **Turn it off** - set the `AVATAR_POSE_MODE` repo secret to `off` and the
+   original `assets/avatar.png` is used exactly as supplied, every time.
+
+The prompt already pins the character down in words as well as with the
+image (`AVATAR_IDENTITY` in `scripts/generate.py`) and asks for the smallest
+possible edit, which helps a lot but cannot fully guarantee consistency. If
+you swap in a different mascot, update that description too - or override it
+with an `AVATAR_DESCRIPTION` secret.
 
 ### AI background generation (best-effort)
 
