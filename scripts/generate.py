@@ -18,6 +18,7 @@ Actions, which has open internet access.
 """
 
 import json
+import math
 import os
 import random
 import re
@@ -26,7 +27,7 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import requests
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 from topics import TOPICS
 
@@ -108,6 +109,9 @@ WHITE = (240, 246, 255)
 MUTED = (168, 194, 230)
 CODE_TEXT = (222, 232, 248)
 DOT_INACTIVE = (45, 70, 120)
+ALERT_RED = (238, 82, 82)
+HEAD_AMBER = (255, 197, 92)
+WARN_ORANGE = (255, 146, 74)
 
 BRAND_HANDLE = "@modernjavascripthub"
 
@@ -311,17 +315,34 @@ def _slide_spec_text(slide, index, total):
     kind = slide.get("type", "content")
     if kind == "title":
         avatar_line = slide.get("avatar_line") or "Let's break this down!"
-        return (
-            f'This is the COVER/THUMBNAIL slide ({index} of {total}).\n'
+        cv = slide.get("cover_visual") or {}
+        spec = (
+            f'This is the COVER/THUMBNAIL slide ({index} of {total}). Make it eye-catching '
+            f'and busy like a top-performing tech carousel cover.\n'
             f'Text that must appear, spelled exactly:\n'
             f'  - small pill label at top left: "{slide.get("kicker", "JS DEEP DIVE")}"\n'
             f'  - an orange "ADVANCED" badge next to that pill\n'
-            f'  - large bold headline: "{slide.get("title", "")}"\n'
-            f'  - smaller subtitle under it: "{slide.get("subtitle", "")}"\n'
-            f'  - a speech bubble coming from the cartoon boy character, saying: '
-            f'"{avatar_line}"\n'
-            f'  - bottom left handle: "{BRAND_HANDLE}"\n'
         )
+        if slide.get("alert"):
+            spec += f'  - a red warning banner under those: "{slide["alert"]}"\n'
+        spec += (
+            f'  - large bold headline in warm amber/yellow: "{slide.get("title", "")}"\n'
+            f'  - smaller white subtitle under it: "{slide.get("subtitle", "")}"\n'
+            f'  - the cartoon boy character standing on the RIGHT side, with a white speech '
+            f'bubble to his LEFT whose tail points at his face, saying: "{avatar_line}". He '
+            f'should look like he is presenting/explaining this to the viewer.\n'
+        )
+        if cv:
+            spec += (
+                f'  - on the lower LEFT, a two-card before/after comparison with an arrow '
+                f'between them:\n'
+                f'      red card with an X mark: "{cv.get("bad_label", "")}" and under it '
+                f'"{cv.get("bad_note", "")}"\n'
+                f'      green card with a check mark: "{cv.get("good_label", "")}" and under it '
+                f'"{cv.get("good_note", "")}"\n'
+            )
+        spec += f'  - bottom left handle: "{BRAND_HANDLE}"\n'
+        return spec
     if kind == "summary":
         return (
             f'This is the closing SUMMARY slide ({index} of {total}).\n'
@@ -411,27 +432,64 @@ def make_background(seed):
             t = y / (H - 1)
             draw.line([(0, y), (W, y)], fill=blend(GRAD_TOP, GRAD_BOTTOM, t))
 
-    draw = ImageDraw.Draw(img)
     rng = random.Random(seed)
-    node_color = blend(GRAD_BOTTOM, ACCENT, 0.35)
-    line_color = blend(GRAD_BOTTOM, ACCENT, 0.16)
-    pts = [(rng.randint(0, W), rng.randint(0, int(H * 0.4))) for _ in range(16)]
+
+    # Circuit texture is drawn on its own layer, then composited, so traces can
+    # glow softly instead of looking like flat hairlines.
+    layer = Image.new("RGB", (W, H), (0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+
+    trace = blend(GRAD_BOTTOM, ACCENT, 0.55)
+    trace_dim = blend(GRAD_BOTTOM, ACCENT, 0.30)
+    pad = blend(GRAD_BOTTOM, ACCENT, 0.75)
+
+    # 1. PCB-style right-angle traces down both side gutters, with solder pads.
+    for side in (0, 1):
+        base_x = 18 if side == 0 else W - 18
+        step = -1 if side == 1 else 1
+        for lane in range(5):
+            x = base_x + step * lane * 22
+            y = rng.randint(0, 160)
+            while y < H:
+                seg = rng.randint(90, 220)
+                ld.line([(x, y), (x, min(y + seg, H))], fill=trace_dim, width=2)
+                y += seg
+                if y < H:
+                    jog = step * rng.randint(14, 34)
+                    ld.line([(x, y), (x + jog, y)], fill=trace_dim, width=2)
+                    ld.ellipse([x + jog - 4, y - 4, x + jog + 4, y + 4], outline=pad, width=2)
+                    x += jog
+                    y += rng.randint(10, 40)
+
+    # 2. Node constellation across the whole canvas (not just the top strip).
+    pts = [(rng.randint(30, W - 30), rng.randint(30, H - 30)) for _ in range(46)]
     for i in range(len(pts)):
         for j in range(i + 1, len(pts)):
-            x1, y1 = pts[i]
-            x2, y2 = pts[j]
-            if ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5 < 240:
-                draw.line([pts[i], pts[j]], fill=line_color, width=1)
+            (x1, y1), (x2, y2) = pts[i], pts[j]
+            if ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5 < 190:
+                ld.line([pts[i], pts[j]], fill=trace_dim, width=1)
     for p in pts:
-        draw.ellipse([p[0] - 3, p[1] - 3, p[0] + 3, p[1] + 3], fill=node_color)
+        ld.ellipse([p[0] - 4, p[1] - 4, p[0] + 4, p[1] + 4], fill=trace)
+        ld.ellipse([p[0] - 8, p[1] - 8, p[0] + 8, p[1] + 8], outline=trace_dim, width=1)
 
+    # 3. Faint hex/chip motifs in the corners.
+    for cx, cy, r in ((90, 150, 46), (W - 90, H - 220, 56), (W - 140, 210, 34)):
+        poly = []
+        for k in range(6):
+            a = math.pi / 3 * k
+            poly.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+        ld.polygon(poly, outline=trace_dim)
+
+    layer = layer.filter(ImageFilter.GaussianBlur(radius=1.2))
+    img = ImageChops.add(img, layer)
+
+    draw = ImageDraw.Draw(img)
     glyph_font = load_font("DejaVuSansMono-Bold.ttf", 30) or load_font("DejaVuSans-Bold.ttf", 30)
     glyphs = ["{ }", "</>", "01", "{ }", "()"]
     for i, g in enumerate(glyphs):
         gx = 40 + i * (W - 80) // (len(glyphs) - 1)
         gy = rng.randint(20, 55)
-        color = blend(GRAD_TOP, ACCENT, 0.22)
-        draw.text((gx, gy), g, font=glyph_font, fill=color)
+        draw.text((gx, gy), g, font=glyph_font, fill=blend(GRAD_TOP, ACCENT, 0.26))
 
     return img
 
@@ -507,10 +565,94 @@ def draw_slide_role_icon(draw, cx, cy, role, r=22):
 # ---------------------------------------------------------------------------
 # Avatar (title slide only): remove near-white background, paste as PNG
 # ---------------------------------------------------------------------------
-def load_avatar_cutout(target_height):
-    if not os.path.exists(AVATAR_PATH):
+POSE_DIR = os.path.join(ASSETS_DIR, "avatar_poses")
+
+# "on" (default) = try to use an AI-redrawn pose of the mascot;
+# "off" = always use assets/avatar.png exactly as supplied.
+AVATAR_POSE_MODE = (os.environ.get("AVATAR_POSE_MODE") or "on").strip().lower()
+
+# Image models drift badly on "redraw this character" unless the character is
+# also described in words. Edit this if you replace assets/avatar.png.
+AVATAR_IDENTITY = (
+    os.environ.get("AVATAR_DESCRIPTION")
+    or "a young boy, 3D animated-film style (Pixar-like), with dark brown hair "
+       "under a navy-blue knitted beanie that has a red-and-white pom-pom on "
+       "top, wearing a green knitted sweater with a cartoon lion face on the "
+       "chest, a light blue collared shirt showing at the neck, light-blue "
+       "cargo jeans and teal-grey sneakers"
+)
+
+# Poses the mascot can be re-drawn in. Generated once from assets/avatar.png by
+# an image model, then committed to the repo and reused every day after that.
+AVATAR_POSES = {
+    "pointing": (
+        "standing and leaning slightly forward, pointing clearly with one hand "
+        "toward his own right (the LEFT side of the frame), as if presenting "
+        "something to the viewer, mouth open mid-sentence, eyes wide and "
+        "enthusiastic, eyebrows raised"
+    ),
+    "excited": (
+        "grinning widely with both eyebrows raised and one hand raised in a "
+        "'wait till you see this' gesture, clearly excited and surprised"
+    ),
+    "thinking": (
+        "one hand on his chin, head tilted slightly, thoughtful puzzled "
+        "expression, as if working through a tricky problem"
+    ),
+}
+
+
+def get_avatar_pose(pose):
+    """Return a path to the mascot re-drawn in `pose`, generating it once via
+    the image model and caching it in assets/avatar_poses/. Falls back to the
+    original avatar (returned as-is) if generation isn't available."""
+    if pose not in AVATAR_POSES or not os.path.exists(AVATAR_PATH):
+        return AVATAR_PATH
+
+    os.makedirs(POSE_DIR, exist_ok=True)
+    cached = os.path.join(POSE_DIR, f"{pose}.png")
+    if os.path.exists(cached):
+        return cached          # already approved/committed - never regenerate
+    if AVATAR_POSE_MODE == "off":
+        return AVATAR_PATH
+
+    mime, b64 = _encode_image_b64(AVATAR_PATH)
+    # Identity drift is the main failure mode here, so the prompt pins the
+    # character down in words as well as with the attached image, and asks for
+    # the smallest possible edit rather than a free redraw.
+    prompt = (
+        "This is an image edit task, not a new illustration. Keep the attached "
+        "character EXACTLY as he is and change as little as possible.\n\n"
+        f"The character is {AVATAR_IDENTITY}. His face, facial features, skin "
+        "tone, hair, beanie with its pom-pom, sweater with its lion graphic, "
+        "jeans, shoes, colours, proportions and rendering style must all stay "
+        "identical to the attached image. Someone who knows this character must "
+        "instantly recognise him as the same character.\n\n"
+        f"Change ONLY his arm position and facial expression, so that he is: "
+        f"{AVATAR_POSES[pose]}.\n\n"
+        "Output: the same character, full body, facing the viewer, at the same "
+        "scale, on a plain pure white background, with no shadow, no text, no "
+        "background objects and no border."
+    )
+    parts = [
+        {"text": prompt},
+        {"inlineData": {"mimeType": mime, "data": b64}},
+    ]
+    img = _call_image_model(parts, f"Avatar pose '{pose}'")
+    if img is None:
+        print(f"Avatar pose '{pose}': unavailable, using the original avatar.", file=sys.stderr)
+        return AVATAR_PATH
+
+    img.save(cached, "PNG")
+    print(f"Avatar pose '{pose}': generated and cached at {cached}.", file=sys.stderr)
+    return cached
+
+
+def load_avatar_cutout(target_height, path=None):
+    path = path or AVATAR_PATH
+    if not os.path.exists(path):
         return None
-    im = Image.open(AVATAR_PATH).convert("RGB")
+    im = Image.open(path).convert("RGB")
     w, h = im.size
     scale = target_height / h
     im = im.resize((int(w * scale), target_height), Image.LANCZOS)
@@ -588,6 +730,65 @@ def draw_speech_bubble(draw, cx, bottom_y, text, font, max_width=560, fill=None,
     return top  # top edge, in case caller wants to reserve space above it
 
 
+def draw_side_speech_bubble(draw, right_x, cy, text, font, box_w=430, max_lines=6):
+    """Speech bubble sitting to the LEFT of the mascot, with its tail pointing
+    right at his face - reads as him actually talking to the viewer, rather
+    than a caption floating over his head."""
+    pad_x, pad_y, line_h = 24, 20, 32
+    lines = wrap_text(draw, text, font, box_w - 2 * pad_x)[:max_lines]
+    box_h = len(lines) * line_h + 2 * pad_y
+    left = right_x - box_w
+    top = cy - box_h / 2
+    tail = 26
+    draw.rounded_rectangle([left, top, right_x, top + box_h], radius=22, fill=WHITE)
+    draw.polygon(
+        [(right_x - 4, cy - tail / 1.6), (right_x - 4, cy + tail / 1.6), (right_x + tail, cy - 4)],
+        fill=WHITE,
+    )
+    ty = top + pad_y
+    for line in lines:
+        draw.text((left + pad_x, ty), line, font=font, fill=(12, 22, 50))
+        ty += line_h
+    return left, top, box_h
+
+
+def draw_cover_compare(draw, x, y, w, visual):
+    """Small before/after infographic on the cover: the slow way in red, the
+    fast way in green, with an arrow between them."""
+    bad_label = visual.get("bad_label") or "The naive way"
+    bad_note = visual.get("bad_note") or "slow path"
+    good_label = visual.get("good_label") or "The right way"
+    good_note = visual.get("good_note") or "stays fast"
+
+    card_h = 112
+    gap = 46
+    lf = load_font("DejaVuSans-Bold.ttf", 27)
+    nf = load_font("DejaVuSans.ttf", 22)
+
+    def card(cy, label, note, color, sign):
+        draw.rounded_rectangle([x, cy, x + w, cy + card_h], radius=16,
+                               fill=blend(PANEL_BG, color, 0.16), outline=color, width=2)
+        # status mark: x for the slow path, check for the fast one
+        mx, my, r = x + 38, cy + card_h / 2, 17
+        draw.ellipse([mx - r, my - r, mx + r, my + r], fill=color)
+        if sign == "bad":
+            draw.line([(mx - 7, my - 7), (mx + 7, my + 7)], fill=(20, 8, 8), width=4)
+            draw.line([(mx - 7, my + 7), (mx + 7, my - 7)], fill=(20, 8, 8), width=4)
+        else:
+            draw.line([(mx - 8, my), (mx - 2, my + 7), (mx + 8, my - 7)],
+                      fill=(6, 24, 14), width=4, joint="curve")
+        for line in wrap_text(draw, label, lf, w - 100)[:1]:
+            draw.text((x + 68, cy + 24), line, font=lf, fill=WHITE)
+        for line in wrap_text(draw, note, nf, w - 100)[:1]:
+            draw.text((x + 68, cy + 60), line, font=nf, fill=color)
+
+    card(y, bad_label, bad_note, ALERT_RED, "bad")
+    arrow_y = y + card_h + gap / 2
+    draw_down_arrow(draw, x + w / 2, y + card_h + 8, arrow_y + 12, color=ACCENT)
+    card(y + card_h + gap, good_label, good_note, CHECK_GREEN, "good")
+    return y + 2 * card_h + gap
+
+
 def render_title_slide(slide, index, total, out_path):
     img = make_background(seed=f"{TODAY}-title")
     draw = ImageDraw.Draw(img)
@@ -595,8 +796,8 @@ def render_title_slide(slide, index, total, out_path):
     draw_chrome(draw, index, total, kicker=kicker)
 
     margin = 60
-    title_font = load_font("DejaVuSans-Bold.ttf", 64)
-    subtitle_font = load_font("DejaVuSans.ttf", 32)
+    title_font = load_font("DejaVuSans-Bold.ttf", 62)
+    subtitle_font = load_font("DejaVuSans.ttf", 30)
 
     # "ADVANCED" difficulty badge, right after the kicker pill
     tag_font = load_font("DejaVuSans-Bold.ttf", 26)
@@ -605,38 +806,88 @@ def render_title_slide(slide, index, total, out_path):
     badge_w = draw.textlength(badge_text, font=tag_font) + 34
     badge_x = margin + kicker_w + 14
     draw.rounded_rectangle([badge_x, 90, badge_x + badge_w, 90 + 46], radius=23,
-                            fill=(255, 138, 76), outline=None)
+                           fill=WARN_ORANGE)
     draw.text((badge_x + 17, 90 + 10), badge_text, font=tag_font, fill=(40, 16, 4))
 
-    y = 180
-    title_lines = wrap_text(draw, slide["title"], title_font, W - 2 * margin)[:4]
-    for line in title_lines:
-        draw.text((margin, y), line, font=title_font, fill=WHITE)
-        y += 76
-    y += 14
-    for line in wrap_text(draw, slide.get("subtitle", ""), subtitle_font, W - 2 * margin)[:3]:
-        draw.text((margin, y), line, font=subtitle_font, fill=MUTED)
-        y += 42
-    y += 10
+    # Red alert banner, like the reference cover's warning strip
+    y = 158
+    alert = slide.get("alert")
+    if alert:
+        af = load_font("DejaVuSans-Bold.ttf", 30)
+        aw = draw.textlength(alert, font=af) + 96
+        draw.rounded_rectangle([margin, y, margin + aw, y + 56], radius=14,
+                               fill=ALERT_RED)
+        # warning mark
+        wx, wy = margin + 36, y + 28
+        draw.polygon([(wx, wy - 15), (wx + 15, wy + 12), (wx - 15, wy + 12)], fill=(255, 240, 220))
+        draw.line([(wx, wy - 6), (wx, wy + 4)], fill=ALERT_RED, width=4)
+        draw.ellipse([wx - 2, wy + 7, wx + 2, wy + 11], fill=ALERT_RED)
+        draw.text((margin + 62, y + 12), alert, font=af, fill=(255, 245, 240))
+        y += 78
 
-    swipe_font = load_font("DejaVuSans-Bold.ttf", 28)
-    swipe_text = "SWIPE TO LEARN  →"
-    draw.text((margin, y), swipe_text, font=swipe_font, fill=ACCENT)
+    # Headline in warm amber so it pops off the blue, like the reference
+    for line in wrap_text(draw, slide.get("title", ""), title_font, W - 2 * margin)[:3]:
+        draw.text((margin, y), line, font=title_font, fill=HEAD_AMBER)
+        y += 72
+    y += 8
+    for line in wrap_text(draw, slide.get("subtitle", ""), subtitle_font, W - 2 * margin)[:2]:
+        draw.text((margin, y), line, font=subtitle_font, fill=WHITE)
+        y += 40
 
-    # Mascot avatar with a speech bubble "explaining" the topic
-    avatar_h = 500
-    avatar = load_avatar_cutout(avatar_h)
+    swipe_font = load_font("DejaVuSans-Bold.ttf", 27)
+    draw.text((margin, y + 16), "SWIPE TO LEARN  →", font=swipe_font, fill=ACCENT)
+
+    # Mascot on the right, "presenting" the before/after cards below-left of him
+    avatar_h = 620
+    # "pointing" pose, so he looks like he's presenting the comparison cards
+    avatar = load_avatar_cutout(avatar_h, path=get_avatar_pose("pointing"))
+    ax = W - margin - (avatar.width if avatar else 300) + 26
+    ay = H - 140 - avatar_h
+
+    # cards sit in the lower-left, clear of the speech bubble above them
+    compare_w = 460
+    compare_h = 2 * 112 + 46
+    compare_top = H - 170 - compare_h
+    visual = slide.get("cover_visual") or {}
+    draw_cover_compare(draw, margin, compare_top, compare_w, visual)
+
     if avatar:
-        ax = (W - avatar.width) // 2
-        ay = H - 150 - avatar_h
-        head_cx = ax + avatar.width // 2
+        # soft spotlight so he stands out from the busy background
+        glow = Image.new("RGB", (W, H), (0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        gcx, gcy = ax + avatar.width / 2, ay + avatar_h * 0.62
+        gd.ellipse([gcx - 250, gcy - 300, gcx + 250, gcy + 300],
+                   fill=blend((0, 0, 0), ACCENT, 0.18))
+        glow = glow.filter(ImageFilter.GaussianBlur(radius=60))
+        img = ImageChops.add(img, glow)
+        draw = ImageDraw.Draw(img)
 
-        bubble_font = load_font("DejaVuSans-Bold.ttf", 27)
-        avatar_line = slide.get("avatar_line") or "Let's break this down!"
-        draw_speech_bubble(draw, head_cx, ay - 6, avatar_line, bubble_font)
+        # bubble beside his head, tail pointing at his face, sitting clear
+        # above the comparison cards
+        bubble_font = load_font("DejaVuSans-Bold.ttf", 25)
+        line = slide.get("avatar_line") or "Hey Devs! Let me show you what actually goes wrong here."
+        head_cy = ay + 112
+        b_left, b_top, b_h = draw_side_speech_bubble(
+            draw, ax + 26, head_cy, line, bubble_font, box_w=430
+        )
 
         img.paste(avatar, (ax, ay), avatar)
-        draw = ImageDraw.Draw(img)  # redraw handle after paste
+        draw = ImageDraw.Draw(img)
+
+        # smooth curved pointer from under the bubble down to the cards, so
+        # the mascot reads as presenting the comparison, not just standing
+        x0, y0 = b_left + 80, b_top + b_h + 6
+        x2, y2 = margin + compare_w * 0.45, compare_top - 14
+        x1, y1 = x0 - 40, (y0 + y2) / 2
+        pts = []
+        for i in range(21):
+            t = i / 20
+            pts.append((
+                (1 - t) ** 2 * x0 + 2 * (1 - t) * t * x1 + t * t * x2,
+                (1 - t) ** 2 * y0 + 2 * (1 - t) * t * y1 + t * t * y2,
+            ))
+        draw.line(pts, fill=ACCENT, width=6, joint="curve")
+        draw.polygon([(x2 - 15, y2 - 16), (x2 + 15, y2 - 16), (x2, y2 + 8)], fill=ACCENT)
 
     draw_chrome(draw, index, total, kicker=None)  # repaint footer over avatar edge if needed
     img.save(out_path, "PNG")
@@ -660,56 +911,216 @@ def panel_icon(draw, cx, cy, kind):
         draw.line([(cx + 1, cy - 5), (cx + 6, cy), (cx + 1, cy + 5)], fill=ACCENT, width=2)
 
 
-def render_panel(draw, x, y, w, h, panel):
-    draw.rounded_rectangle([x, y, x + w, y + h], radius=18, fill=PANEL_BG, outline=PANEL_BORDER, width=2)
+CODE_KEYWORDS = {
+    "function", "const", "let", "var", "return", "if", "else", "for", "while",
+    "await", "async", "new", "class", "import", "export", "from", "try",
+    "catch", "finally", "throw", "typeof", "of", "in", "=>", "default",
+}
+KW_COLOR = (147, 170, 255)
+STR_COLOR = (255, 186, 126)
+NUM_COLOR = (255, 214, 140)
+PUNCT_COLOR = (150, 176, 214)
 
-    header_font = load_font("DejaVuSans-Bold.ttf", 24)
-    icon_cx, icon_cy = x + 34, y + 34
-    panel_icon(draw, icon_cx, icon_cy, panel.get("kind", "flow"))
-    draw.text((x + 58, y + 20), panel.get("title", ""), font=header_font, fill=WHITE)
 
-    content_y = y + 68
-    content_x = x + 24
-    content_w = w - 48
-    lines = [str(l) for l in panel.get("lines", [])][:5]
+def draw_code_line(draw, x, y, line, font):
+    """Monospace line with light syntax colouring, so code blocks read like a
+    real editor rather than a flat grey wall."""
+    for token in re.findall(r"'[^']*'|\"[^\"]*\"|\w+|\s+|[^\w\s]", line):
+        if token.isspace():
+            x += draw.textlength(token, font=font)
+            continue
+        if token[:1] in "'\"":
+            color = STR_COLOR
+        elif token in CODE_KEYWORDS:
+            color = KW_COLOR
+        elif token.replace(".", "").isdigit():
+            color = NUM_COLOR
+        elif not token[:1].isalnum() and token[:1] != "_":
+            color = PUNCT_COLOR
+        else:
+            color = CODE_TEXT
+        draw.text((x, y), token, font=font, fill=color)
+        x += draw.textlength(token, font=font)
+
+
+def draw_down_arrow(draw, cx, y0, y1, color=ACCENT):
+    draw.line([(cx, y0), (cx, y1 - 5)], fill=color, width=3)
+    draw.polygon([(cx - 6, y1 - 7), (cx + 6, y1 - 7), (cx, y1 + 1)], fill=color)
+
+
+def _panel_fonts(s):
+    return {
+        "code": load_font("DejaVuSansMono.ttf", max(13, int(20 * s))),
+        "out": load_font("DejaVuSansMono.ttf", max(13, int(21 * s))),
+        "chip": load_font("DejaVuSans-Bold.ttf", max(13, int(20 * s))),
+        "res": load_font("DejaVuSans-Bold.ttf", max(13, int(19 * s))),
+    }
+
+
+def panel_metrics(draw, panel, content_w, s):
+    """Returns (height_needed, fits_width, extras) for this panel at scale `s`.
+    Width matters as much as height: picking a scale on height alone is what
+    made long code lines and output rows spill past the panel border."""
+    fonts = _panel_fonts(s)
     kind = panel.get("kind", "flow")
+    lines = [str(l) for l in panel.get("lines", [])][:5]
+    if not lines:
+        lines = [""]
+    n = len(lines)
+    fits = True
+    extras = {}
 
     if kind == "code":
-        code_font = load_font("DejaVuSansMono.ttf", 20)
-        draw.rounded_rectangle([content_x, content_y, x + w - 24, y + h - 16], radius=10, fill=(6, 14, 34))
-        cy = content_y + 14
-        for line in lines[: max(1, int(h - 90) // 26)]:
-            draw.text((content_x + 14, cy), line[:34], font=code_font, fill=CODE_TEXT)
-            cy += 26
+        inner_w = content_w - int(28 * s)
+        widest = max(draw.textlength(l, font=fonts["code"]) for l in lines)
+        fits = widest <= inner_w
+        h = n * int(28 * s) + int(30 * s)
+
     elif kind == "output":
-        line_font = load_font("DejaVuSansMono.ttf", 21)
-        cy = content_y + 6
-        for line in lines[: max(1, int(h - 90) // 34)]:
-            draw_check_badge(draw, content_x + 12, cy + 12, r=11)
-            draw.text((content_x + 34, cy), line[:30], font=line_font, fill=MUTED)
-            cy += 34
-        result = panel.get("result")
-        if result:
-            rf = load_font("DejaVuSans-Bold.ttf", 18)
-            draw.text((content_x, y + h - 34), f"✓ {result}", font=rf, fill=CHECK_GREEN)
-    else:  # flow / mechanics: chained small boxes
-        item_font = load_font("DejaVuSans.ttf", 19)
-        max_items = max(1, min(len(lines), int(h - 100) // 46))
-        cy = content_y
-        for i, line in enumerate(lines[:max_items]):
-            box_h = 34
-            wrapped = wrap_text(draw, line, item_font, content_w - 20)[:1]
-            text = wrapped[0] if wrapped else line[:28]
-            draw.rounded_rectangle([content_x, cy, x + w - 24, cy + box_h], radius=8,
-                                    fill=blend(PANEL_BG, ACCENT, 0.12), outline=PANEL_BORDER, width=1)
-            draw.text((content_x + 10, cy + 6), text, font=item_font, fill=MUTED)
-            cy += box_h + 8
-            if i < max_items - 1:
-                draw.line([(x + w / 2, cy - 8), (x + w / 2, cy - 2)], fill=ACCENT, width=2)
-        result = panel.get("result")
-        if result:
-            rf = load_font("DejaVuSans-Bold.ttf", 17)
-            draw.text((content_x, y + h - 30), f"✓ {result}", font=rf, fill=CHECK_GREEN)
+        r = max(8, int(12 * s))
+        text_w = content_w - (2 * r + 20) - 14
+        widest = max(draw.textlength(l, font=fonts["out"]) for l in lines)
+        fits = widest <= text_w
+        h = n * int(42 * s) + int(16 * s)
+
+    else:  # flow chips: allow up to two wrapped lines per chip
+        text_w = content_w - int(28 * s)
+        line_h = int(26 * s)
+        wrapped_all, max_lines = [], 1
+        for line in lines:
+            wrapped = wrap_text(draw, line, fonts["chip"], text_w)
+            if len(wrapped) > 2:
+                fits = False
+                wrapped = wrapped[:2]
+            wrapped_all.append(wrapped)
+            max_lines = max(max_lines, len(wrapped))
+        chip_h = max_lines * line_h + int(20 * s)
+        extras = {"wrapped": wrapped_all, "chip_h": chip_h, "line_h": line_h}
+        h = n * chip_h + (n - 1) * int(26 * s)
+
+    result = panel.get("result")
+    if result:
+        h += int(40 * s)
+        if draw.textlength(result, font=fonts["res"]) + int(60 * s) > content_w:
+            fits = False
+
+    return h, fits, extras
+
+
+def panel_content_height(draw, panel, content_w, s):
+    return panel_metrics(draw, panel, content_w, s)[0]
+
+
+def render_panel(draw, x, y, w, h, panel):
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=18, fill=PANEL_BG,
+                           outline=PANEL_BORDER, width=2)
+    # Header strip, so the title reads as a label band like the reference.
+    draw.rounded_rectangle([x + 2, y + 2, x + w - 2, y + 56], radius=16,
+                           fill=blend(PANEL_BG, ACCENT, 0.10))
+    draw.line([(x + 14, y + 56), (x + w - 14, y + 56)], fill=blend(PANEL_BG, ACCENT, 0.35), width=2)
+
+    header_font = load_font("DejaVuSans-Bold.ttf", 24)
+    panel_icon(draw, x + 34, y + 30, panel.get("kind", "flow"))
+    draw.text((x + 58, y + 16), panel.get("title", ""), font=header_font, fill=WHITE)
+
+    pad = 20
+    content_x = x + pad
+    content_w = w - 2 * pad
+    area_top = y + 66
+    area_h = h - 66 - 14
+
+    lines = [str(l) for l in panel.get("lines", [])][:5]
+    kind = panel.get("kind", "flow")
+    result = panel.get("result")
+
+    # Pick the largest scale whose content fits BOTH vertically and
+    # horizontally, so sparse content grows to fill the panel while long code
+    # lines shrink instead of spilling past the border.
+    candidates = (2.5, 2.2, 2.0, 1.85, 1.7, 1.55, 1.4, 1.3, 1.2, 1.1, 1.0,
+                  0.92, 0.85, 0.78, 0.7, 0.62, 0.55)
+    s, needed, extras = candidates[-1], None, {}
+    for candidate in candidates:
+        h_need, fits, ex = panel_metrics(draw, panel, content_w, candidate)
+        if fits and h_need <= area_h:
+            s, needed, extras = candidate, h_need, ex
+            break
+    if needed is None:  # nothing fit cleanly - use the smallest and clip gracefully
+        needed, _, extras = panel_metrics(draw, panel, content_w, s)
+
+    fonts = _panel_fonts(s)
+    cy = area_top + max(0, (area_h - needed) // 2)
+
+    if kind == "code":
+        code_font = fonts["code"]
+        line_h = int(28 * s)
+        block_h = len(lines) * line_h + int(30 * s)
+        draw.rounded_rectangle([content_x, cy, x + w - pad, cy + block_h], radius=12,
+                               fill=(5, 11, 28), outline=blend(PANEL_BG, ACCENT, 0.30), width=1)
+        ty = cy + int(15 * s)
+        for line in lines:
+            draw_code_line(draw, content_x + int(14 * s), ty, line, code_font)
+            ty += line_h
+        cy += block_h
+
+    elif kind == "output":
+        line_font = fonts["out"]
+        item_h = int(42 * s)
+        r = max(8, int(12 * s))
+        for line in lines:
+            draw.rounded_rectangle([content_x, cy, x + w - pad, cy + item_h - int(8 * s)],
+                                   radius=10, fill=blend(PANEL_BG, ACCENT, 0.07))
+            draw_check_badge(draw, content_x + r + 8, cy + (item_h - int(8 * s)) // 2, r=r)
+            draw.text((content_x + 2 * r + 20, cy + int(7 * s)), line, font=line_font, fill=WHITE)
+            cy += item_h
+
+    else:  # flow / mechanics: chips chained with real arrows between them
+        item_font = fonts["chip"]
+        chip_h = extras.get("chip_h", int(46 * s))
+        line_h = extras.get("line_h", int(26 * s))
+        wrapped_all = extras.get("wrapped") or [[l] for l in lines]
+        arrow_h = int(26 * s)
+        for i, wrapped in enumerate(wrapped_all):
+            last = i == len(wrapped_all) - 1
+            chip_fill = blend(PANEL_BG, CHECK_GREEN, 0.16) if last else blend(PANEL_BG, ACCENT, 0.18)
+            chip_edge = CHECK_GREEN if last else ACCENT
+            draw.rounded_rectangle([content_x, cy, x + w - pad, cy + chip_h], radius=12,
+                                   fill=chip_fill, outline=chip_edge, width=2)
+            ty = cy + (chip_h - len(wrapped) * line_h) / 2
+            for part in wrapped:
+                tw = draw.textlength(part, font=item_font)
+                draw.text((content_x + (content_w - tw) / 2, ty), part, font=item_font, fill=WHITE)
+                ty += line_h
+            cy += chip_h
+            if not last:
+                draw_down_arrow(draw, x + w / 2, cy + 4, cy + arrow_h - 2)
+                cy += arrow_h
+
+    if result:
+        rf = fonts["res"]
+        badge_w = draw.textlength(result, font=rf) + int(52 * s)
+        bh = int(34 * s)
+        by = min(cy + int(8 * s), y + h - bh - 10)
+        bx = x + (w - badge_w) / 2
+        draw.rounded_rectangle([bx, by, bx + badge_w, by + bh], radius=bh / 2,
+                               fill=blend(PANEL_BG, CHECK_GREEN, 0.22), outline=CHECK_GREEN, width=2)
+        draw_check_badge(draw, bx + int(19 * s), by + bh / 2, r=max(8, int(11 * s)))
+        draw.text((bx + int(36 * s), by + (bh - int(22 * s)) / 2), result, font=rf, fill=CHECK_GREEN)
+
+
+def draw_series_banner(draw, cy, text="JAVASCRIPT DEEP DIVE SERIES"):
+    """Centred series banner, like the reference slide's bottom strip."""
+    font = load_font("DejaVuSans-Bold.ttf", 22)
+    tw = draw.textlength(text, font=font)
+    bw, bh = tw + 96, 44
+    bx = (W - bw) / 2
+    draw.rounded_rectangle([bx, cy, bx + bw, cy + bh], radius=bh / 2,
+                           fill=blend(GRAD_BOTTOM, ACCENT, 0.22), outline=ACCENT, width=2)
+    # small spark/star mark on the left of the label
+    sx, sy = bx + 30, cy + bh / 2
+    for dx, dy in ((0, -11), (0, 11), (-11, 0), (11, 0)):
+        draw.line([(sx, sy), (sx + dx, sy + dy)], fill=ACCENT, width=3)
+    draw.ellipse([sx - 4, sy - 4, sx + 4, sy + 4], fill=WHITE)
+    draw.text((bx + 52, cy + (bh - 26) / 2), text, font=font, fill=WHITE)
 
 
 def render_content_slide(slide, index, total, out_path):
@@ -732,30 +1143,46 @@ def render_content_slide(slide, index, total, out_path):
         panels.append({"title": "", "kind": "flow", "lines": []})
 
     grid_top = y
-    grid_bottom = H - 110
+    grid_bottom = H - 150  # leave room for the series banner + footer
     gap = 22
     panel_w = (W - 2 * margin - gap) / 2
-    panel_h = (grid_bottom - grid_top - gap) / 2
+    avail = grid_bottom - grid_top - gap
+
+    # Row heights follow the content. Each panel's "ideal" height is what it
+    # needs at the largest scale its text can take without overflowing; a row
+    # never grows past that, so short content doesn't get a huge empty box.
+    def panel_ideal(panel):
+        for candidate in (2.5, 2.2, 2.0, 1.85, 1.7, 1.55, 1.4, 1.3, 1.2, 1.1, 1.0):
+            h, fits, _ = panel_metrics(draw, panel, panel_w - 40, candidate)
+            if fits:
+                return h + 86
+        return 260
+
+    row_ideal = [max(panel_ideal(panels[r * 2]), panel_ideal(panels[r * 2 + 1])) for r in range(2)]
+    total_ideal = sum(row_ideal)
+
+    if total_ideal <= avail:
+        row_h = row_ideal
+        grid_top += (avail - total_ideal) * 0.35  # sit nearer the heading, not dead centre
+    else:
+        row_h = [avail * (n / total_ideal) for n in row_ideal]
 
     for i, panel in enumerate(panels):
         col, row = i % 2, i // 2
         px = margin + col * (panel_w + gap)
-        py = grid_top + row * (panel_h + gap)
-        render_panel(draw, px, py, panel_w, panel_h, panel)
+        py = grid_top + (0 if row == 0 else row_h[0] + gap)
+        render_panel(draw, px, py, panel_w, row_h[row], panel)
 
     # Connect the 4 panels into a visual flow: -> across each row, v down each column
     hgap_x = margin + panel_w + gap / 2
-    row0_cy = grid_top + panel_h / 2
-    row1_cy = grid_top + panel_h + gap + panel_h / 2
-    draw_flow_chevron(draw, hgap_x, row0_cy, "right")
-    draw_flow_chevron(draw, hgap_x, row1_cy, "right")
+    draw_flow_chevron(draw, hgap_x, grid_top + row_h[0] / 2, "right")
+    draw_flow_chevron(draw, hgap_x, grid_top + row_h[0] + gap + row_h[1] / 2, "right")
 
-    vgap_y = grid_top + panel_h + gap / 2
-    col0_cx = margin + panel_w / 2
-    col1_cx = margin + panel_w + gap + panel_w / 2
-    draw_flow_chevron(draw, col0_cx, vgap_y, "down")
-    draw_flow_chevron(draw, col1_cx, vgap_y, "down")
+    vgap_y = grid_top + row_h[0] + gap / 2
+    draw_flow_chevron(draw, margin + panel_w / 2, vgap_y, "down")
+    draw_flow_chevron(draw, margin + panel_w + gap + panel_w / 2, vgap_y, "down")
 
+    draw_series_banner(draw, H - 126)
     img.save(out_path, "PNG")
 
 
@@ -790,7 +1217,24 @@ def render_summary_slide(slide, index, total, out_path):
     for line in cta_lines:
         draw.text((margin + 30, cy), line, font=cta_font, fill=ACCENT)
         cy += 42
+    y += box_h + 56
 
+    # Action chips fill the lower half instead of leaving it blank.
+    chip_font = load_font("DejaVuSans-Bold.ttf", 30)
+    chips = [("SAVE", "for later"), ("SHARE", "with your team"), ("FOLLOW", "for daily posts")]
+    chip_w = (W - 2 * margin - 2 * 20) / 3
+    for i, (head, sub) in enumerate(chips):
+        cx0 = margin + i * (chip_w + 20)
+        draw.rounded_rectangle([cx0, y, cx0 + chip_w, y + 132], radius=16,
+                               fill=blend(PANEL_BG, ACCENT, 0.10), outline=PANEL_BORDER, width=2)
+        draw_check_badge(draw, cx0 + chip_w / 2, y + 36, r=18)
+        hw = draw.textlength(head, font=chip_font)
+        draw.text((cx0 + (chip_w - hw) / 2, y + 62), head, font=chip_font, fill=WHITE)
+        sf = load_font("DejaVuSans.ttf", 21)
+        sw = draw.textlength(sub, font=sf)
+        draw.text((cx0 + (chip_w - sw) / 2, y + 98), sub, font=sf, fill=MUTED)
+
+    draw_series_banner(draw, H - 126)
     img.save(out_path, "PNG")
 
 
@@ -1018,11 +1462,20 @@ Produce a JSON object (ONLY JSON, no markdown fences) with this exact shape:
       "kicker": "3-4 word label, e.g. JS DEEP DIVE",
       "title": "punchy 5-9 word hook naming the specific bug/gotcha",
       "subtitle": "one short sentence promising the fix they'll learn",
-      "avatar_line": "a short 3-7 word first-person line the mascot character
-        is 'saying' in a speech bubble, as if personally inviting the viewer
-        into this topic - e.g. 'Let's debug this together!' or 'You've
-        shipped this bug before...' - punchy and conversational, not a
-        repeat of the title"
+      "alert": "a 3-6 word red-warning banner line for the top of the cover,
+        phrased as a blunt warning, e.g. 'Stop Writing useEffect Like This!'
+        or 'This Kills Your Render Perf!'",
+      "avatar_line": "what the mascot character says in a speech bubble - 12
+        to 22 words, written as if he is personally talking to the viewer and
+        about to show them something: an opener, the surprising fact, and a
+        hook. e.g. 'Hey Devs! Did you know delete can make your objects up to
+        10x slower? Let me show you why!'",
+      "cover_visual": {{
+        "bad_label": "2-4 words naming the wrong/slow approach, e.g. 'delete obj.key'",
+        "bad_note": "2-4 word consequence, e.g. '10x slower'",
+        "good_label": "2-4 words naming the right/fast approach, e.g. 'obj.key = null'",
+        "good_note": "2-4 word benefit, e.g. 'stays optimized'"
+      }}
     }},
     {{
       "type": "content",
