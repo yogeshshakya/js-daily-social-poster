@@ -187,6 +187,67 @@ def _extract_inline_image(response_json):
     return None
 
 
+def _call_image_model(parts, label):
+    """Try each candidate image-generation model in turn with the given
+    request parts. Returns a PIL Image on the first success, or None if every
+    candidate fails (no access, quota, error, or no image in the response)."""
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {"responseModalities": ["IMAGE"]},
+    }
+
+    for model in IMAGE_MODEL_CANDIDATES:
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={GEMINI_API_KEY}"
+        )
+        try:
+            resp = requests.post(url, json=payload, timeout=120)
+        except requests.RequestException as e:
+            print(f"{label}: network error calling '{model}': {e}", file=sys.stderr)
+            continue
+        if not resp.ok:
+            print(
+                f"{label}: model '{model}' failed with {resp.status_code}: "
+                f"{resp.text[:300]}",
+                file=sys.stderr,
+            )
+            continue
+        img = _extract_inline_image(resp.json())
+        if img is None:
+            print(f"{label}: model '{model}' returned no image data.", file=sys.stderr)
+            continue
+
+        print(f"{label}: generated successfully with '{model}'.", file=sys.stderr)
+        return img
+
+    print(f"{label}: all candidate models failed.", file=sys.stderr)
+    return None
+
+
+def _cover_fit(img):
+    """Resize + center-crop to exactly (W, H). Use for backgrounds, where
+    cropping the edges is harmless."""
+    src_w, src_h = img.size
+    scale = max(W / src_w, H / src_h)
+    img = img.resize((int(src_w * scale) + 1, int(src_h * scale) + 1), Image.LANCZOS)
+    left = (img.width - W) // 2
+    top = (img.height - H) // 2
+    return img.crop((left, top, left + W, top + H))
+
+
+def _contain_fit(img):
+    """Resize to fit fully inside (W, H) and pad with the brand navy. Use for
+    full AI-generated SLIDES, where cropping could cut off text."""
+    src_w, src_h = img.size
+    scale = min(W / src_w, H / src_h)
+    new_w, new_h = max(1, int(src_w * scale)), max(1, int(src_h * scale))
+    resized = img.resize((new_w, new_h), Image.LANCZOS)
+    canvas = Image.new("RGB", (W, H), GRAD_TOP)
+    canvas.paste(resized, ((W - new_w) // 2, (H - new_h) // 2))
+    return canvas
+
+
 def generate_daily_background():
     """Best-effort: ask a Gemini image-generation model for a background
     texture in the style of assets/bg_reference.jpg. Returns a PIL Image
@@ -205,56 +266,139 @@ def generate_daily_background():
         "readable when placed on top. No text, no logos, no watermarks, no "
         "people, no readable code - purely an abstract textured background."
     )
-    payload = {
-        "contents": [{
-            "parts": [
-                {"text": prompt},
-                {"inlineData": {"mimeType": mime, "data": b64}},
-            ]
-        }],
-        "generationConfig": {"responseModalities": ["IMAGE"]},
-    }
+    parts = [
+        {"text": prompt},
+        {"inlineData": {"mimeType": mime, "data": b64}},
+    ]
 
-    for model in IMAGE_MODEL_CANDIDATES:
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent?key={GEMINI_API_KEY}"
+    img = _call_image_model(parts, "AI background")
+    if img is None:
+        print("AI background: using procedural gradient instead.", file=sys.stderr)
+        return None
+
+    img = _cover_fit(img)
+    # Legibility wash: darken toward our brand navy so white text/panels
+    # placed on top stay readable regardless of what the model produced.
+    wash = Image.new("RGB", (W, H), GRAD_TOP)
+    return Image.blend(img, wash, alpha=0.45)
+
+
+# ---------------------------------------------------------------------------
+# Full-slide AI image generation (SLIDE_IMAGE_MODE=ai, the default).
+#
+# The image model is given the reference background image (and, for the title
+# slide, the mascot avatar) plus the exact text that must appear, and asked to
+# lay the whole slide out itself as an infographic. Image models are not
+# reliable at rendering exact text, so EVERY slide falls back to the
+# procedural PIL renderer if generation fails - and the whole mode can be
+# switched off with the SLIDE_IMAGE_MODE=procedural env var / repo secret.
+# ---------------------------------------------------------------------------
+SLIDE_IMAGE_MODE = (os.environ.get("SLIDE_IMAGE_MODE") or "ai").strip().lower()
+
+
+def _panel_spec_text(panel, n):
+    lines = panel.get("lines") or []
+    spec = f'  Panel {n} - heading "{panel.get("title", "")}", containing these lines exactly:\n'
+    for line in lines[:5]:
+        spec += f"    * {line}\n"
+    if panel.get("result"):
+        spec += f'    * small highlighted result label: "{panel["result"]}"\n'
+    return spec
+
+
+def _slide_spec_text(slide, index, total):
+    """Exact, unambiguous description of what must appear on this slide."""
+    kind = slide.get("type", "content")
+    if kind == "title":
+        avatar_line = slide.get("avatar_line") or "Let's break this down!"
+        return (
+            f'This is the COVER/THUMBNAIL slide ({index} of {total}).\n'
+            f'Text that must appear, spelled exactly:\n'
+            f'  - small pill label at top left: "{slide.get("kicker", "JS DEEP DIVE")}"\n'
+            f'  - an orange "ADVANCED" badge next to that pill\n'
+            f'  - large bold headline: "{slide.get("title", "")}"\n'
+            f'  - smaller subtitle under it: "{slide.get("subtitle", "")}"\n'
+            f'  - a speech bubble coming from the cartoon boy character, saying: '
+            f'"{avatar_line}"\n'
+            f'  - bottom left handle: "{BRAND_HANDLE}"\n'
         )
-        try:
-            resp = requests.post(url, json=payload, timeout=90)
-        except requests.RequestException as e:
-            print(f"AI background: network error calling '{model}': {e}", file=sys.stderr)
-            continue
-        if not resp.ok:
-            print(
-                f"AI background: model '{model}' failed with {resp.status_code}: "
-                f"{resp.text[:300]}",
-                file=sys.stderr,
-            )
-            continue
-        img = _extract_inline_image(resp.json())
-        if img is None:
-            print(f"AI background: model '{model}' returned no image data.", file=sys.stderr)
-            continue
+    if kind == "summary":
+        return (
+            f'This is the closing SUMMARY slide ({index} of {total}).\n'
+            f'Text that must appear, spelled exactly:\n'
+            f'  - heading: "{slide.get("heading", "")}"\n'
+            f'  - body text: "{slide.get("body", "")}"\n'
+            f'  - call to action: "{slide.get("cta", "")}"\n'
+            f'  - bottom left handle: "{BRAND_HANDLE}"\n'
+        )
 
-        print(f"AI background: generated successfully with '{model}'.", file=sys.stderr)
-        # Cover-fit to our canvas size (resize then center-crop).
-        src_w, src_h = img.size
-        scale = max(W / src_w, H / src_h)
-        img = img.resize((int(src_w * scale) + 1, int(src_h * scale) + 1), Image.LANCZOS)
-        left = (img.width - W) // 2
-        top = (img.height - H) // 2
-        img = img.crop((left, top, left + W, top + H))
+    spec = (
+        f'This is CONTENT slide {index} of {total}.\n'
+        f'Text that must appear, spelled exactly:\n'
+        f'  - slide heading at the top: "{slide.get("heading", "")}"\n'
+        f'  - then a 2x2 grid of four rounded infographic panels, connected by '
+        f'small arrows so the grid reads as one left-to-right, top-to-bottom flow:\n'
+    )
+    for i, panel in enumerate(slide.get("panels", [])[:4], start=1):
+        spec += _panel_spec_text(panel, i)
+    spec += f'  - bottom left handle: "{BRAND_HANDLE}"\n'
+    return spec
 
-        # Legibility wash: darken toward our brand navy so white text/panels
-        # placed on top stay readable regardless of what the model produced.
-        wash = Image.new("RGB", (W, H), GRAD_TOP)
-        img = Image.blend(img, wash, alpha=0.45)
-        return img
 
-    print("AI background: all candidate models failed, using procedural gradient instead.",
-          file=sys.stderr)
-    return None
+def generate_slide_image_ai(slide, index, total):
+    """Best-effort: have the image model lay out the entire slide. Returns a
+    PIL Image sized (W, H), or None so the caller falls back to PIL."""
+    if not os.path.exists(BG_REFERENCE_PATH):
+        return None
+
+    is_title = slide.get("type", "content") == "title"
+    spec = _slide_spec_text(slide, index, total)
+
+    prompt = (
+        "Create a single finished Instagram carousel slide, portrait 4:5 "
+        "(1080x1350), for a developer-education account.\n\n"
+        "BACKGROUND: use the attached reference image's background exactly - "
+        "the same deep navy/blue tone with the same subtle glowing circuit-"
+        "board pattern. Keep it dark and low-contrast so text on top is easy "
+        "to read.\n\n"
+        "STYLE: explain the content visually, with infographics - rounded "
+        "bordered panels, clear icons, arrows showing flow between steps, "
+        "monospace-looking code blocks, checkmarks for outputs. Bright cyan/"
+        "blue accents, white body text, green for correct results, orange/red "
+        "for errors. Clean, modern, high contrast, generous spacing, nothing "
+        "cramped or clipped at the edges.\n\n"
+    )
+
+    if is_title:
+        prompt += (
+            "CHARACTER: the second attached image is the mascot character. Use "
+            "that exact character, full body, standing in the lower half of the "
+            "slide, with its background removed so it sits cleanly on the slide "
+            "background. Do not redesign the character.\n\n"
+        )
+
+    prompt += (
+        "TEXT: render every line of the text below exactly as written, with "
+        "correct spelling - do not paraphrase, translate, invent extra text, or "
+        "add lorem ipsum. Any code must be character-for-character identical to "
+        "what is given.\n\n"
+        f"{spec}\n"
+        "Do not add any other logos, watermarks, URLs or captions."
+    )
+
+    bg_mime, bg_b64 = _encode_image_b64(BG_REFERENCE_PATH)
+    parts = [
+        {"text": prompt},
+        {"inlineData": {"mimeType": bg_mime, "data": bg_b64}},
+    ]
+    if is_title and os.path.exists(AVATAR_PATH):
+        av_mime, av_b64 = _encode_image_b64(AVATAR_PATH)
+        parts.append({"inlineData": {"mimeType": av_mime, "data": av_b64}})
+
+    img = _call_image_model(parts, f"AI slide {index}/{total}")
+    if img is None:
+        return None
+    return _contain_fit(img)
 
 
 def make_background(seed):
@@ -651,6 +795,20 @@ def render_summary_slide(slide, index, total, out_path):
 
 
 def render_slide(slide, index, total, out_path):
+    # Preferred path: let the image model lay out the whole slide (background
+    # from the reference image + infographics + text). If that isn't available
+    # for this account, or fails for this slide, fall back to the procedural
+    # PIL renderer below, which always works.
+    if SLIDE_IMAGE_MODE == "ai":
+        ai_img = generate_slide_image_ai(slide, index, total)
+        if ai_img is not None:
+            ai_img.save(out_path, "PNG")
+            return
+        print(
+            f"AI slide {index}/{total}: falling back to the procedural renderer.",
+            file=sys.stderr,
+        )
+
     kind = slide.get("type", "content")
     if kind == "title":
         render_title_slide(slide, index, total, out_path)
@@ -757,10 +915,23 @@ def choose_topic(history):
 Instagram/Telegram account teaching {SUBJECTS} to intermediate/senior
 developers.
 
-The topic must be ADVANCED and NARROW - a specific commonly-misunderstood
-behavior or mistake experienced developers actually make in real code, not a
-beginner definition or a broad category name. For calibration, here is the
-STYLE and DEPTH expected (do not just reuse these, they're only examples):
+The topic must be ADVANCED and NARROW - never a beginner definition or a
+broad category name. Pick ONE of these two flavours (vary between them across
+days, roughly half and half):
+
+  (a) A specific commonly-misunderstood behavior or mistake experienced
+      developers actually make in real code.
+  (b) Something NEW or RECENTLY CHANGED in the ecosystem that experienced
+      developers are still getting wrong or haven't adopted yet - a recent
+      JavaScript language feature, a newly stable/changed React or Next.js
+      API, a recently changed default or deprecation, or a modern replacement
+      for an older pattern people still use out of habit. Only pick things
+      you are actually confident exist and are correct about - if you are not
+      certain a feature shipped or how it behaves, choose flavour (a)
+      instead. Never invent a release, version number, or API.
+
+For calibration, here is the STYLE and DEPTH expected (these are flavour (a)
+examples; do not just reuse them, they're only examples):
 {examples_block}
 
 {avoid_block}
