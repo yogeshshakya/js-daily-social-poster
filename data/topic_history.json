@@ -2,5 +2,9 @@
   {
     "date": "2026-09-12",
     "topic": "Why mutating a ref's .current property during the render phase violates React's concurrent rendering model and causes unpredictable, hard-to-debug UI tearing"
+  },
+  {
+    "date": "2026-09-13",
+    "topic": "Why using the `delete` keyword to remove a property from an object transitions V8 to dictionary mode, permanently destroying the hidden class (Shape) optimization and causing massive performance drops in hot paths"
   }
 ]
