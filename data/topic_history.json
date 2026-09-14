@@ -26,5 +26,9 @@
   {
     "date": "2026-09-14",
     "topic": "Why throwing an error inside a `new Promise` executor function fails to reject the promise if the throw occurs inside an asynchronous callback (like `setTimeout`), leading to uncaught runtime exceptions instead of a rejected promise."
+  },
+  {
+    "date": "2026-09-14",
+    "topic": "Why omitting the 'await' keyword when returning a Promise inside a try-catch block causes rejected promises to bypass the local catch block entirely, and why the deprecated 'no-return-await' ESLint rule contributed to this widespread misunderstanding."
   }
 ]
