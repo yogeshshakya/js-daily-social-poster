@@ -248,6 +248,35 @@ logs:
 Re-run this workflow any time you want to sanity-check your secrets without
 actually posting anything.
 
+### About the posting time (GitHub's scheduler is best-effort)
+
+The workflow targets **7:00 AM IST**, but GitHub does not guarantee that a
+scheduled run starts on time. Its own docs say scheduled events "can be
+delayed during periods of high loads of GitHub Actions workflow runs", that
+"high load times include the start of every hour", and that "if the load is
+sufficiently high enough, some queued jobs may be dropped". Delays of a few
+hours, and occasionally a whole skipped day, are normal on the free tier.
+
+Two things in this repo reduce the damage:
+
+- **Odd minutes, three attempts.** Instead of one cron at a busy slot, there
+  are three (06:56, 07:14 and 07:42 IST) on unpopular minutes. If one is
+  dropped or badly delayed, a later one usually gets through.
+- **A once-a-day guard.** The first step reads `data/last_post.json`; if it
+  already records today's date (IST), the run exits immediately without
+  posting. The date is written only after posting actually succeeds, so a
+  failed run doesn't block the next attempt. Manual runs
+  (`workflow_dispatch`) always proceed, guard or not.
+
+If you need the post to go out at an exact minute, GitHub's own scheduler
+cannot give you that at any setting. The reliable pattern is to trigger the
+workflow from outside: keep only `workflow_dispatch` here, and have a free
+external scheduler (cron-job.org, a Cloudflare Worker cron, Google Cloud
+Scheduler, or any always-on machine) call the REST endpoint
+`POST /repos/{owner}/{repo}/actions/workflows/daily-post.yml/dispatches` at
+the time you want, using a fine-grained token with Actions write access on
+this repo.
+
 ### 4. Enable the daily schedule
 Nothing else to do - the `daily-post.yml` workflow is already scheduled for
 01:30 UTC (7:00 AM IST) every day once the file is on the `main` branch.
