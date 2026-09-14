@@ -88,6 +88,16 @@ Run the **"Check setup"** workflow after adding the secrets - it now reports
 whether both are present, what the token's type and scopes are, and when it
 expires.
 
+**If you see `Object with ID '***' does not exist` (code 100, subcode 33)**
+for Facebook, the page id and the token don't match up. The masked `***` is
+your `FB_PAGE_ID` secret, and Facebook is saying that object isn't visible to
+that token. `post_to_facebook()` now checks this before uploading anything
+and prints which of these it is: the id isn't the numeric Page ID, the token
+is a USER token rather than that Page's own token, or the token lacks
+`pages_manage_posts`. If the token itself knows which Page it belongs to, the
+script uses that id automatically and tells you the correct value to put in
+`FB_PAGE_ID`.
+
 ### Topic selection (Gemini picks it, not a fixed list)
 
 `choose_topic()` in `scripts/generate.py` asks Gemini to pick a specific,
