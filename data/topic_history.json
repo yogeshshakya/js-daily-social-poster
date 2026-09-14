@@ -22,5 +22,9 @@
   {
     "date": "2026-09-14",
     "topic": "Why using React 19's new `use` hook to resolve a Promise inside a component causes an infinite re-render loop if the Promise is instantiated directly during render instead of being cached with `React.cache` or `useMemo`"
+  },
+  {
+    "date": "2026-09-14",
+    "topic": "Why throwing an error inside a `new Promise` executor function fails to reject the promise if the throw occurs inside an asynchronous callback (like `setTimeout`), leading to uncaught runtime exceptions instead of a rejected promise."
   }
 ]
