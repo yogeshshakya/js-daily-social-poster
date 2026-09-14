@@ -18,5 +18,9 @@
   {
     "date": "2026-09-13",
     "topic": "Why pre-allocating arrays with 'new Array(size)' or manually resizing them via 'length' transitions V8 to 'holey' element kinds, permanently degrading iteration performance compared to packed arrays"
+  },
+  {
+    "date": "2026-09-14",
+    "topic": "Why using React 19's new `use` hook to resolve a Promise inside a component causes an infinite re-render loop if the Promise is instantiated directly during render instead of being cached with `React.cache` or `useMemo`"
   }
 ]
