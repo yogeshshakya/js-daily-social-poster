@@ -171,6 +171,51 @@ def post_to_instagram(caption):
     return publish_body
 
 
+def resolve_facebook_page_id():
+    """Check FB_PAGE_ID is actually reachable with FB_PAGE_TOKEN.
+
+    A wrong page id (or a user token pasted in place of a page token) fails
+    later with an unhelpful 'Object with ID ... does not exist' (code 100,
+    subcode 33). Checking up front turns that into a readable message, and if
+    the token itself knows which page it belongs to we use that id instead so
+    the post still goes out.
+    """
+    check = requests.get(
+        f"https://graph.facebook.com/{GRAPH_API_VERSION}/{FB_PAGE_ID}",
+        params={"fields": "id,name", "access_token": FB_PAGE_TOKEN},
+        timeout=30,
+    )
+    body = check.json()
+    if check.ok and body.get("id"):
+        print(f"Facebook: posting to page '{body.get('name')}' ({body['id']})", file=sys.stderr)
+        return body["id"]
+
+    print(f"Facebook: FB_PAGE_ID is not reachable with this token: {body}", file=sys.stderr)
+
+    # Fall back to asking the token which page it belongs to.
+    me = requests.get(
+        f"https://graph.facebook.com/{GRAPH_API_VERSION}/me",
+        params={"fields": "id,name", "access_token": FB_PAGE_TOKEN},
+        timeout=30,
+    )
+    me_body = me.json()
+    if me.ok and me_body.get("id"):
+        print(
+            f"Facebook: the token belongs to '{me_body.get('name')}' (id {me_body['id']}). "
+            f"Using that id. Update the FB_PAGE_ID secret to {me_body['id']} to silence this.",
+            file=sys.stderr,
+        )
+        return me_body["id"]
+
+    raise RuntimeError(
+        "Facebook page id/token check failed. Most likely one of: "
+        "(1) FB_PAGE_ID is not the numeric Page ID, "
+        "(2) FB_PAGE_TOKEN is a USER token instead of that Page's own token, or "
+        "(3) the token is missing the pages_manage_posts permission. "
+        f"Page lookup said: {body}. Token lookup said: {me_body}"
+    )
+
+
 def post_to_facebook(caption):
     """Post the same images to a Facebook Page.
 
@@ -185,7 +230,8 @@ def post_to_facebook(caption):
         )
         return None
 
-    base = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{FB_PAGE_ID}"
+    page_id = resolve_facebook_page_id()
+    base = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{page_id}"
 
     if len(RAW_IMAGE_URLS) == 1:
         resp = requests.post(
