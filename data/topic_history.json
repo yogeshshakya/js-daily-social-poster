@@ -42,5 +42,9 @@
   {
     "date": "2026-09-16",
     "topic": "Why calling a React 19 Server Action imperatively inside an event handler fails to trigger pending states in 'useTransition' or 'useActionState' unless manually wrapped in 'startTransition', unlike passing it directly to a form's action attribute"
+  },
+  {
+    "date": "2026-09-16",
+    "topic": "Why wrapping a class instance that uses private fields (#field) in a JavaScript Proxy throws a runtime TypeError when calling methods that access those fields, due to private brand checks failing on the proxy receiver instead of the underlying target"
   }
 ]
