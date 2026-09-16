@@ -38,5 +38,9 @@
   {
     "date": "2026-09-15",
     "topic": "Why reading mutable global variables or browser APIs directly inside a React component's render phase causes visual 'tearing' under concurrent rendering, and how `useSyncExternalStore` prevents this by forcing a synchronous fallback when mutations occur mid-render."
+  },
+  {
+    "date": "2026-09-16",
+    "topic": "Why calling a React 19 Server Action imperatively inside an event handler fails to trigger pending states in 'useTransition' or 'useActionState' unless manually wrapped in 'startTransition', unlike passing it directly to a form's action attribute"
   }
 ]
