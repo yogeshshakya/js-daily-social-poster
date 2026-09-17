@@ -18,7 +18,12 @@ Every day at 7:00 AM IST, this repo's GitHub Actions workflow:
 2. Turns that research into an **8-slide carousel script** following a full
    narrative arc: title/hook -> the problem -> why it happens -> the fix ->
    how the fix works -> real-world impact -> a related pro tip ->
-   takeaway/follow-CTA.
+   takeaway/follow-CTA. The topic itself stays advanced and narrow, but the
+   writing is instructed to explain it in **plain language** - short words, a
+   quick analogy, and a one-clause translation the first time a technical
+   term is used - and every content-slide panel also carries a one-line
+   `plain` caption (no code, no jargon) rendered under the panel so a reader
+   who isn't deep into engine/runtime internals still gets the point.
 3. Renders each slide as a 1080x1350 image on a **deep-blue background**.
    The base texture is generated fresh each day by asking a Gemini
    image-generation model to produce an abstract navy/circuit-pattern
@@ -32,18 +37,28 @@ Every day at 7:00 AM IST, this repo's GitHub Actions workflow:
    each slide's heading; panel titles/content adapt to what each slide is
    actually showing (code input/output, step lists, scenario/impact, etc).
    The title/thumbnail slide is built as a proper cover: a red warning
-   banner, an amber headline, the bundled mascot (`assets/avatar.png`,
-   background auto-removed) standing on the right under a soft spotlight
-   with a speech bubble beside his head (tail pointing at his face) where he
-   talks to the viewer, a curved pointer leading down to a red/green
-   before-after comparison of the wrong vs right approach, and an "ADVANCED"
-   difficulty badge. Only that slide has the mascot, as requested.
-4. Writes an SEO-style Instagram caption (hook + value + 2-3 evergreen
-   high-search-volume keyword phrases + CTA) with a curated mix of
-   broad/niche/community/branded hashtags (10-15 tags), separated from the
-   caption body by a forced blank-line gap (Instagram normally collapses
-   plain blank lines, so this uses invisible Braille-blank characters to
-   keep the spacing visible), plus a shorter Telegram-safe variant.
+   banner, an amber headline, the mascot (background auto-removed) posed and
+   placed under a soft spotlight with a speech bubble beside his head (tail
+   pointing at his face) where he talks to the viewer, a curved pointer
+   leading down to **a visual that reflects today's actual topic** - either a
+   real before/after code-diff card or a short step-by-step diagram of the
+   underlying mechanism, whichever Gemini judges fits the topic (see "Cover
+   visual: code-diff or diagram, chosen per topic" below) - and an "ADVANCED"
+   difficulty badge. **The mascot side/pose also rotates daily** so
+   consecutive posts don't look like the same template - see "Cover layout
+   rotation" below. Only that slide has the mascot, as requested.
+4. Writes an Instagram caption as **short scannable bullet points** instead
+   of a paragraph: one hook line, 3-4 plain-language bullet points that on
+   their own explain the concept, and a one-line takeaway/CTA - followed by
+   2-3 evergreen SEO keyword phrases and a curated mix of
+   broad/niche/community/branded hashtags (10-15 tags). A local safety net
+   (`_normalize_caption_parts()`) guarantees this shape even if Gemini
+   ignores the instruction and returns a run-on paragraph in one field - see
+   "Caption: guaranteed bullet points" below. The bullet body is
+   separated from the keywords and hashtags by a forced blank-line gap
+   (Instagram normally collapses plain blank lines, so this uses invisible
+   Braille-blank characters to keep the spacing visible), plus a shorter
+   Telegram-safe variant.
 5. Commits the images into `images/`, and appends today's topic to
    `data/topic_history.json` (used to avoid repeats - see below).
 6. Posts the full carousel + caption to your Telegram channel (as an album)
@@ -108,13 +123,29 @@ narrow and advanced the topic should be), not as the pool it must choose
 from - so topics can be genuinely new day to day, not limited to 20 fixed
 entries.
 
-The prompt asks it to alternate between two flavours: (a) a
-commonly-misunderstood behavior or bug, and (b) something new or recently
-changed in the ecosystem that experienced developers still get wrong.
-Since Google Search grounding isn't used (paid-tier only), flavour (b) comes
-from the model's own training knowledge rather than live news, so the prompt
-explicitly tells it to fall back to flavour (a) rather than guess about any
-release or API it isn't confident about.
+The prompt asks it to pick between three flavours: (a) a
+commonly-misunderstood behavior or bug, (b) something new or recently
+changed in the ecosystem that experienced developers still get wrong, and
+(c) the advanced concept underneath whatever is genuinely trending today in
+the JS/React/Next.js community, for growth. Since Google Search grounding
+isn't used (paid-tier only), flavour (b) comes from the model's own training
+knowledge rather than live news, so the prompt explicitly tells it to fall
+back to flavour (a) rather than guess about any release or API it isn't
+confident about.
+
+**Flavour (c) is grounded in real data, not a guess.** Before asking Gemini
+to pick, `fetch_trending_signals()` pulls today's actual top discussion
+titles from two free, no-key-needed public APIs - Hacker News (via the
+Algolia search API, filtered to JS/React/Next.js/TypeScript/V8 stories) and
+Reddit's `r/javascript`, `r/reactjs`, `r/nextjs` top-of-day - and hands those
+titles to Gemini as live context: "here's what's actually being discussed
+today, find the advanced concept underneath it." This is best-effort like
+everything else network-dependent here: if both sources fail (rate-limited,
+blocked, or just down), `choose_topic()` proceeds without them and falls
+back to flavours (a)/(b) - check the logs for `Trending signal: ... fetch
+failed` to see if that happened on a given run. (In this repo's own dev
+sandbox both APIs are blocked by the sandbox's proxy, which is expected -
+GitHub Actions has open internet, so this works there.)
 
 To avoid repeats, every topic actually posted is appended to
 `data/topic_history.json` (kept to the last ~30), and that list is sent back
@@ -150,15 +181,71 @@ If you find the AI slides' text too unreliable in practice, set the
 Note this makes 8 image-generation calls per run instead of 1, so it uses
 noticeably more of your Gemini quota than the background-only mode did.
 
+### Cover layout rotation
+
+To stop every day's thumbnail looking like the same template with different
+text, `choose_cover_variant()` in `scripts/generate.py` picks one of 4
+mascot side/pose combinations each day, avoiding whatever was used the
+previous run (tracked in `data/topic_history.json` alongside the topic):
+
+| variant id | mascot side | pose |
+|---|---|---|
+| `right_pointing` | right | pointing |
+| `left_excited` | left | excited |
+| `right_thinking` | right | thinking |
+| `left_pointing` | left | pointing |
+
+This affects both the AI-generated cover (the prompt tells the image model
+which side the mascot stands on and which pose it's given) and the
+procedural PIL fallback (which mirrors the whole layout - avatar, speech
+bubble, and the visual it points at - left or right). To add more variety,
+add entries to `COVER_VARIANTS`.
+
+### Cover visual: code-diff or diagram, chosen per topic
+
+The thing the mascot points to on the cover is no longer a generic
+"before/after" label - it's built from the actual topic. In `build_carousel`'s
+prompt, Gemini fills a `cover_visual` object and picks its own `style`:
+
+- **`code`** - for topics where the bug/fix genuinely is one line of code.
+  Renders as a small code-diff card: a red "Before" line with the real buggy
+  code, an arrow, a green "After" line with the real fix
+  (`draw_cover_code_diff()`).
+- **`diagram`** - for topics that are more about an internal mechanism than
+  one code line. Renders as 2-4 connected step chips describing what
+  actually happens (`draw_cover_diagram()`), e.g. "Object has a shape" →
+  "delete removes a slot" → "Shape invalidated" → "Falls to dict mode".
+
+Gemini is told to pick whichever genuinely fits that day's topic rather than
+defaulting to one every time. If a response is missing both `code_before`
+and `diagram_steps` (e.g. an older cached script, or a partial response),
+`draw_cover_visual()` falls back to the original two-card before/after
+layout so nothing breaks.
+
+### Caption: guaranteed bullet points
+
+Gemini doesn't reliably keep `caption_hook`/`caption_points` short and
+separate on its own - it can dump a whole explanation into one field as a
+run-on paragraph even when the prompt asks for short bullets. Rather than
+trust the model's formatting, `_normalize_caption_parts()` in
+`scripts/generate.py` enforces the shape locally before the caption is ever
+written to a file: any field that turns out to be multiple sentences gets
+split on sentence boundaries, and any single very long sentence (>22 words)
+gets split on its natural clause breaks. The result is always genuinely
+bulleted, regardless of what shape Gemini's response came back in. `dry_run.py`
+includes a test that feeds a deliberately messy single-paragraph string
+through this and prints the result, so you can verify it before trusting it
+in production.
+
 ### Mascot poses (generated once, then cached)
 
 The bundled `assets/avatar.png` is a single static image, so his pose and
 expression can't be changed in code. Instead, `get_avatar_pose()` asks the
-image model to redraw that same character in a given pose (currently
-`pointing`, used on the cover so he looks like he is presenting the
-comparison cards, plus `excited` and `thinking` defined for future use),
-keeping the same face, clothes and art style, on a plain white background
-that the existing cutout code silhouettes.
+image model to redraw that same character in a given pose - `pointing`,
+`excited`, and `thinking` are all in active use now, one per cover variant
+above (previously only `pointing` was actually used even though all three
+were generated) - keeping the same face, clothes and art style, on a plain
+white background that the existing cutout code silhouettes.
 
 The result is written to `assets/avatar_poses/<pose>.png` and committed by
 the workflow, so **each pose is generated only once** - every later run just
