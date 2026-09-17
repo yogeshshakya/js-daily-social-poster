@@ -111,7 +111,56 @@ def wait_for_container(creation_id):
     raise RuntimeError(f"Instagram container {creation_id} never finished processing (timed out).")
 
 
+IG_REQUIRED_SCOPES = ("instagram_basic", "instagram_content_publish")
+
+
+def report_instagram_token(token):
+    """Best-effort: print what this token actually is and which scopes it has.
+
+    Instagram publishing fails with a bare '(#10) Application does not have
+    permission for this action' when a scope is missing, which says nothing
+    about WHICH scope. Printing the scope list up front turns that into an
+    obvious answer. Never fatal - if the check itself fails we just post.
+    """
+    try:
+        resp = requests.get(
+            f"https://graph.facebook.com/{GRAPH_API_VERSION}/debug_token",
+            params={"input_token": token, "access_token": token},
+            timeout=30,
+        )
+        info = resp.json().get("data", {})
+    except Exception as e:  # noqa: BLE001 - diagnostics must never break posting
+        print(f"Instagram: token check skipped ({e})", file=sys.stderr)
+        return
+
+    if not info:
+        print("Instagram: token check returned nothing useful.", file=sys.stderr)
+        return
+
+    scopes = info.get("scopes", [])
+    expires = info.get("expires_at")
+    print(
+        f"Instagram: token type={info.get('type')} "
+        f"expires_at={'never' if expires == 0 else expires} "
+        f"scopes={', '.join(scopes) if scopes else 'none reported'}",
+        file=sys.stderr,
+    )
+    missing = [s for s in IG_REQUIRED_SCOPES if s not in scopes]
+    if missing:
+        print(
+            "Instagram: WARNING - this token is missing "
+            f"{', '.join(missing)}. That is what causes "
+            "'(#10) Application does not have permission for this action'. "
+            "Regenerate the token in Graph API Explorer with instagram_basic, "
+            "instagram_content_publish, pages_show_list and "
+            "pages_read_engagement, exchange it for a long-lived one, then "
+            "update the IG_ACCESS_TOKEN secret.",
+            file=sys.stderr,
+        )
+
+
 def post_to_instagram(caption):
+    report_instagram_token(IG_ACCESS_TOKEN)
     base = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{IG_BUSINESS_ID}"
 
     if len(RAW_IMAGE_URLS) == 1:
