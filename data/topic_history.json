@@ -62,5 +62,10 @@
   {
     "date": "2026-09-17",
     "topic": "Why returning an async function directly inside a React useEffect hook behaves unexpectedly by implicitly returning a Promise object instead of executing a cleanup function, leaving stale subscriptions or timers active"
+  },
+  {
+    "date": "2026-09-17",
+    "topic": "Why wrapping a component in `React.memo` is completely bypassed when it receives JSX children, because the `children` prop is transpiled into a new object reference on every parent render, rendering the shallow comparison useless unless those children are explicitly memoized.",
+    "cover_variant": "right_thinking"
   }
 ]
