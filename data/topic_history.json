@@ -58,5 +58,9 @@
   {
     "date": "2026-09-17",
     "topic": "Why using Object.defineProperty to create a non-writable, non-configurable property on a JavaScript object silently fails in strict mode or behaves unpredictably in sloppy mode when applied to frozen or sealed objects, and why developers often mistake it for a safer alternative to Object.freeze."
+  },
+  {
+    "date": "2026-09-17",
+    "topic": "Why returning an async function directly inside a React useEffect hook behaves unexpectedly by implicitly returning a Promise object instead of executing a cleanup function, leaving stale subscriptions or timers active"
   }
 ]
