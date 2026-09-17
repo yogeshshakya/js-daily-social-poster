@@ -50,5 +50,9 @@
   {
     "date": "2026-09-17",
     "topic": "Why the new ES2024 'Object.groupBy' utility returns a null-prototype object instead of a plain object, and why calling standard prototype methods like 'hasOwnProperty' directly on the returned grouping throws a TypeError."
+  },
+  {
+    "date": "2026-09-17",
+    "topic": "Why calling Next.js's `redirect()` function inside a try-catch block catches the internal redirection error, preventing the redirect from executing and mistakenly triggering the catch-block error handling instead"
   }
 ]
