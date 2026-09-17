@@ -26,10 +26,11 @@ CAROUSEL = {
             "avatar_line": "Hey Devs! Deleting a property can silently drop your object "
                            "out of V8's fast path. Let me show you why!",
             "cover_visual": {
-                "bad_label": "delete obj.key",
-                "bad_note": "goes dictionary mode",
-                "good_label": "obj.key = undefined",
-                "good_note": "keeps hidden class",
+                "style": "code",
+                "bad_label": "Before",
+                "good_label": "After",
+                "code_before": "delete obj.key",
+                "code_after": "obj.key = undefined",
             },
         },
         {
@@ -38,13 +39,17 @@ CAROUSEL = {
             "icon": "bug",
             "panels": [
                 {"title": "Naive Code", "kind": "code",
-                 "lines": ["const o = { a: 1, b: 2 };", "delete o.a;", "use(o.b);"]},
+                 "lines": ["const o = { a: 1, b: 2 };", "delete o.a;", "use(o.b);"],
+                 "plain": "This looks totally normal - nothing here looks risky."},
                 {"title": "What You Expect", "kind": "flow",
-                 "lines": ["Property removed", "Same speed as before"]},
+                 "lines": ["Property removed", "Same speed as before"],
+                 "plain": "You'd assume removing one key changes nothing else."},
                 {"title": "Measured", "kind": "output",
-                 "lines": ["before: 12ms", "after: 121ms"], "result": "10x slower"},
+                 "lines": ["before: 12ms", "after: 121ms"], "result": "10x slower",
+                 "plain": "But the object got dramatically slower to read."},
                 {"title": "Why Odd", "kind": "flow",
-                 "lines": ["Same data", "Same loop", "Very different time"]},
+                 "lines": ["Same data", "Same loop", "Very different time"],
+                 "plain": "Nothing about your code changed, yet performance tanked."},
             ],
         },
         {
@@ -130,12 +135,13 @@ CAROUSEL = {
             "cta": "Follow @modernjavascripthub for daily JS/React/Next.js deep dives",
         },
     ],
-    "caption": "Ever deleted one property and watched a hot loop get 10x slower? "
-               "delete doesn't just remove a key - it invalidates the object's hidden "
-               "class and can push it into dictionary mode, where every later read "
-               "pays a hash lookup and the JIT's inline caches stop helping. Assigning "
-               "undefined, or rebuilding with rest syntax, keeps the fast path intact. "
-               "Save this for your next performance review.",
+    "caption_hook": "Ever deleted one property and watched a hot loop get 10x slower?",
+    "caption_points": [
+        "delete doesn't just remove a key - it changes the object's internal shape.",
+        "That change can push the object into a slower 'dictionary mode' for good.",
+        "Assigning undefined, or rebuilding with rest syntax, keeps the fast path.",
+    ],
+    "caption_takeaway": "\U0001f4a1 Save this for your next performance review.",
     "seo_keywords": [
         "javascript performance optimization",
         "v8 hidden classes explained",
@@ -153,17 +159,26 @@ def main():
     outdir = sys.argv[1] if len(sys.argv) > 1 else "dry_run"
     os.makedirs(outdir, exist_ok=True)
 
+    variant_id = os.environ.get("COVER_VARIANT")
+    variant = next((v for v in g.COVER_VARIANTS if v["id"] == variant_id), None) or g.COVER_VARIANTS[0]
+    print(f"Using cover variant: {variant['id']}")
+
     slides = CAROUSEL["slides"]
     total = len(slides)
     files = []
     for i, slide in enumerate(slides, start=1):
         path = os.path.join(outdir, f"slide{i}.png")
-        g.render_slide(slide, i, total, path)
+        slide_variant = variant if slide.get("type") == "title" else None
+        g.render_slide(slide, i, total, path, variant=slide_variant)
         files.append(path)
         print(f"rendered {path} ({slide.get('type', 'content')})")
 
     ig, tg = g.build_captions(
-        CAROUSEL["caption"], CAROUSEL["seo_keywords"], CAROUSEL["hashtags"]
+        CAROUSEL["caption_hook"],
+        CAROUSEL["caption_points"],
+        CAROUSEL["caption_takeaway"],
+        CAROUSEL["seo_keywords"],
+        CAROUSEL["hashtags"],
     )
     with open(os.path.join(outdir, "caption_instagram.txt"), "w", encoding="utf-8") as f:
         f.write(ig)
@@ -172,6 +187,36 @@ def main():
 
     print("\n--- INSTAGRAM CAPTION ---")
     print(ig)
+
+    # Extra check: render slide 1 with a "diagram"-style cover_visual too, so
+    # both cover-visual styles get eyeballed, not just "code".
+    diagram_slide = dict(slides[0])
+    diagram_slide["cover_visual"] = {
+        "style": "diagram",
+        "diagram_steps": [
+            "Object has a shape",
+            "delete removes a slot",
+            "Shape invalidated",
+            "Falls to dict mode",
+        ],
+    }
+    diagram_path = os.path.join(outdir, "slide1_diagram_variant.png")
+    g.render_slide(diagram_slide, 1, total, diagram_path, variant=variant)
+    print(f"rendered {diagram_path} (title, diagram cover_visual)")
+
+    # Extra check: prove the caption safety net turns a misbehaving,
+    # paragraph-shaped Gemini response into real bullets.
+    messy_hook = (
+        "Ever deleted one property and watched a hot loop get 10x slower? "
+        "delete doesn't just remove a key - it invalidates the object's "
+        "hidden class and can push it into dictionary mode, where every "
+        "later read pays a hash lookup and the JIT's inline caches stop "
+        "helping, so assigning undefined instead keeps the fast path intact."
+    )
+    messy_ig, _ = g.build_captions(messy_hook, [], "", CAROUSEL["seo_keywords"], CAROUSEL["hashtags"])
+    print("\n--- CAPTION SAFETY-NET TEST (messy single-paragraph input) ---")
+    print(messy_ig)
+
     print(f"\nDone: {len(files)} slides + 2 caption files in {outdir}/")
 
 

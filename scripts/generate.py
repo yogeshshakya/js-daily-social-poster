@@ -307,41 +307,40 @@ def _panel_spec_text(panel, n):
         spec += f"    * {line}\n"
     if panel.get("result"):
         spec += f'    * small highlighted result label: "{panel["result"]}"\n'
+    if panel.get("plain"):
+        spec += (
+            f'    * a short plain-English caption at the bottom of this panel, in a '
+            f'smaller muted font, no jargon: "{panel["plain"]}"\n'
+        )
     return spec
 
 
-def _slide_spec_text(slide, index, total):
+def _slide_spec_text(slide, index, total, variant=None, topic=None):
     """Exact, unambiguous description of what must appear on this slide."""
     kind = slide.get("type", "content")
     if kind == "title":
         avatar_line = slide.get("avatar_line") or "Let's break this down!"
-        cv = slide.get("cover_visual") or {}
+        topic_line = topic or slide.get("title", "")
         spec = (
-            f'This is the COVER/THUMBNAIL slide ({index} of {total}). Make it eye-catching '
-            f'and busy like a top-performing tech carousel cover.\n'
-            f'Text that must appear, spelled exactly:\n'
-            f'  - small pill label at top left: "{slide.get("kicker", "JS DEEP DIVE")}"\n'
-            f'  - an orange "ADVANCED" badge next to that pill\n'
+            f'This is the COVER/THUMBNAIL slide ({index} of {total}). Topic: "{topic_line}".\n\n'
+            f'Generate a thumbnail for this topic with a supporting infographic so the '
+            f'thumbnail is eye-catching. Creatively use the attached avatar character so it '
+            f'looks like the avatar wants to explain/say something about this topic - choose '
+            f'his pose, gesture, expression, and placement yourself, in whatever way best '
+            f'sells the topic. Keep his face, clothes, colours and character design exactly '
+            f'as in the attached image - only his pose/expression may change. Use the '
+            f'attached background reference image as the background for this slide.\n\n'
+            f'Text that must appear on the thumbnail, spelled exactly:\n'
+            f'  - small pill label: "{slide.get("kicker", "JS DEEP DIVE")}"\n'
         )
         if slide.get("alert"):
-            spec += f'  - a red warning banner under those: "{slide["alert"]}"\n'
+            spec += f'  - a short warning line: "{slide["alert"]}"\n'
         spec += (
-            f'  - large bold headline in warm amber/yellow: "{slide.get("title", "")}"\n'
-            f'  - smaller white subtitle under it: "{slide.get("subtitle", "")}"\n'
-            f'  - the cartoon boy character standing on the RIGHT side, with a white speech '
-            f'bubble to his LEFT whose tail points at his face, saying: "{avatar_line}". He '
-            f'should look like he is presenting/explaining this to the viewer.\n'
+            f'  - headline: "{slide.get("title", "")}"\n'
+            f'  - subtitle: "{slide.get("subtitle", "")}"\n'
+            f'  - what the avatar is saying, e.g. in a speech bubble near him: "{avatar_line}"\n'
+            f'  - bottom handle: "{BRAND_HANDLE}"\n'
         )
-        if cv:
-            spec += (
-                f'  - on the lower LEFT, a two-card before/after comparison with an arrow '
-                f'between them:\n'
-                f'      red card with an X mark: "{cv.get("bad_label", "")}" and under it '
-                f'"{cv.get("bad_note", "")}"\n'
-                f'      green card with a check mark: "{cv.get("good_label", "")}" and under it '
-                f'"{cv.get("good_note", "")}"\n'
-            )
-        spec += f'  - bottom left handle: "{BRAND_HANDLE}"\n'
         return spec
     if kind == "summary":
         return (
@@ -366,14 +365,14 @@ def _slide_spec_text(slide, index, total):
     return spec
 
 
-def generate_slide_image_ai(slide, index, total):
+def generate_slide_image_ai(slide, index, total, variant=None, topic=None):
     """Best-effort: have the image model lay out the entire slide. Returns a
     PIL Image sized (W, H), or None so the caller falls back to PIL."""
     if not os.path.exists(BG_REFERENCE_PATH):
         return None
 
     is_title = slide.get("type", "content") == "title"
-    spec = _slide_spec_text(slide, index, total)
+    spec = _slide_spec_text(slide, index, total, variant=variant, topic=topic)
 
     prompt = (
         "Create a single finished Instagram carousel slide, portrait 4:5 "
@@ -393,9 +392,9 @@ def generate_slide_image_ai(slide, index, total):
     if is_title:
         prompt += (
             "CHARACTER: the second attached image is the mascot character. Use "
-            "that exact character, full body, standing in the lower half of the "
-            "slide, with its background removed so it sits cleanly on the slide "
-            "background. Do not redesign the character.\n\n"
+            "that exact character, full body, with its background removed so it "
+            "sits cleanly on the slide background - see the instructions below "
+            "for how to pose and place him.\n\n"
         )
 
     prompt += (
@@ -602,6 +601,30 @@ AVATAR_POSES = {
 }
 
 
+# Cover layouts the title slide rotates through (mascot side + pose), so
+# daily posts don't all share one template. What the mascot points at (a
+# code-diff card or a mini step-diagram) is chosen per-topic by Gemini in
+# cover_visual.style instead, since that depends on the topic, not the day.
+COVER_VARIANTS = [
+    {"id": "right_pointing", "side": "right", "pose": "pointing"},
+    {"id": "left_excited", "side": "left", "pose": "excited"},
+    {"id": "right_thinking", "side": "right", "pose": "thinking"},
+    {"id": "left_pointing", "side": "left", "pose": "pointing"},
+]
+
+
+def choose_cover_variant(history):
+    """Pick today's cover layout, avoiding whatever was used last time so
+    consecutive days don't look identical."""
+    last_id = None
+    for entry in reversed(history):
+        if entry.get("cover_variant"):
+            last_id = entry["cover_variant"]
+            break
+    choices = [v for v in COVER_VARIANTS if v["id"] != last_id] or COVER_VARIANTS
+    return random.choice(choices)
+
+
 def get_avatar_pose(pose):
     """Return a path to the mascot re-drawn in `pose`, generating it once via
     the image model and caching it in assets/avatar_poses/. Falls back to the
@@ -730,26 +753,37 @@ def draw_speech_bubble(draw, cx, bottom_y, text, font, max_width=560, fill=None,
     return top  # top edge, in case caller wants to reserve space above it
 
 
-def draw_side_speech_bubble(draw, right_x, cy, text, font, box_w=430, max_lines=6):
-    """Speech bubble sitting to the LEFT of the mascot, with its tail pointing
-    right at his face - reads as him actually talking to the viewer, rather
-    than a caption floating over his head."""
+def draw_side_speech_bubble(draw, anchor_x, cy, text, font, box_w=430, max_lines=6, side="right"):
+    """Speech bubble sitting beside the mascot, tail pointing at his face - reads
+    as him actually talking to the viewer, rather than a caption floating over
+    his head. side="right" means the mascot is to the RIGHT of the bubble (the
+    bubble's right edge sits at anchor_x, tail points right); side="left" mirrors
+    this for a mascot placed on the left side of the frame."""
     pad_x, pad_y, line_h = 24, 20, 32
     lines = wrap_text(draw, text, font, box_w - 2 * pad_x)[:max_lines]
     box_h = len(lines) * line_h + 2 * pad_y
-    left = right_x - box_w
-    top = cy - box_h / 2
     tail = 26
-    draw.rounded_rectangle([left, top, right_x, top + box_h], radius=22, fill=WHITE)
-    draw.polygon(
-        [(right_x - 4, cy - tail / 1.6), (right_x - 4, cy + tail / 1.6), (right_x + tail, cy - 4)],
-        fill=WHITE,
-    )
+    top = cy - box_h / 2
+    if side == "right":
+        left, right = anchor_x - box_w, anchor_x
+    else:
+        left, right = anchor_x, anchor_x + box_w
+    draw.rounded_rectangle([left, top, right, top + box_h], radius=22, fill=WHITE)
+    if side == "right":
+        draw.polygon(
+            [(right - 4, cy - tail / 1.6), (right - 4, cy + tail / 1.6), (right + tail, cy - 4)],
+            fill=WHITE,
+        )
+    else:
+        draw.polygon(
+            [(left + 4, cy - tail / 1.6), (left + 4, cy + tail / 1.6), (left - tail, cy - 4)],
+            fill=WHITE,
+        )
     ty = top + pad_y
     for line in lines:
         draw.text((left + pad_x, ty), line, font=font, fill=(12, 22, 50))
         ty += line_h
-    return left, top, box_h
+    return left, top, box_h, right
 
 
 def draw_cover_compare(draw, x, y, w, visual):
@@ -789,7 +823,88 @@ def draw_cover_compare(draw, x, y, w, visual):
     return y + 2 * card_h + gap
 
 
-def render_title_slide(slide, index, total, out_path):
+def draw_cover_code_diff(draw, x, y, w, visual):
+    """Cover visual for code-shaped topics: a real before/after code line
+    (the actual bug and its fix), not a generic label - so the cover reflects
+    today's specific topic instead of a fixed template."""
+    bad_label = visual.get("bad_label") or "Before"
+    good_label = visual.get("good_label") or "After"
+    code_before = visual.get("code_before") or "// buggy line"
+    code_after = visual.get("code_after") or "// fixed line"
+
+    card_h = 230
+    draw.rounded_rectangle([x, y, x + w, y + card_h], radius=20,
+                           fill=blend(PANEL_BG, ACCENT, 0.10), outline=PANEL_BORDER, width=2)
+    tag_f = load_font("DejaVuSans-Bold.ttf", 19)
+    code_f = load_font("DejaVuSansMono-Bold.ttf", 24)
+
+    def code_row(cy, tag, code, color):
+        draw.rounded_rectangle([x + 18, cy, x + 18 + draw.textlength(tag, font=tag_f) + 20, cy + 26],
+                               radius=8, fill=blend(PANEL_BG, color, 0.35))
+        draw.text((x + 28, cy + 3), tag, font=tag_f, fill=color)
+        rows_y = cy + 34
+        draw.rounded_rectangle([x + 18, rows_y, x + w - 18, rows_y + 44], radius=10,
+                               fill=(5, 11, 28), outline=blend(PANEL_BG, color, 0.4), width=1)
+        for line in wrap_text(draw, code, code_f, w - 56)[:1]:
+            draw_code_line(draw, x + 30, rows_y + 9, line, code_f)
+        return rows_y + 44
+
+    row1_bottom = code_row(y + 18, bad_label.upper(), code_before, ALERT_RED)
+    arrow_y = row1_bottom + 22
+    draw_down_arrow(draw, x + w / 2, row1_bottom + 4, arrow_y, color=ACCENT)
+    code_row(arrow_y + 8, good_label.upper(), code_after, CHECK_GREEN)
+    return y + card_h
+
+
+def draw_cover_diagram(draw, x, y, w, visual):
+    """Cover visual for concept-shaped topics: a short connected step-flow
+    (2-4 chips) describing today's mechanism, instead of a generic label."""
+    steps = [str(s) for s in (visual.get("diagram_steps") or [])][:4]
+    if not steps:
+        steps = [visual.get("bad_label") or "The problem", visual.get("good_label") or "The fix"]
+
+    n = len(steps)
+    chip_h, gap = 52, 20
+    card_h = n * chip_h + (n - 1) * gap + 40
+    draw.rounded_rectangle([x, y, x + w, y + card_h], radius=20,
+                           fill=blend(PANEL_BG, ACCENT, 0.10), outline=PANEL_BORDER, width=2)
+    chip_f = load_font("DejaVuSans-Bold.ttf", 22)
+    cy = y + 20
+    for i, step in enumerate(steps):
+        last = i == n - 1
+        tone = CHECK_GREEN if last else ACCENT
+        draw.rounded_rectangle([x + 20, cy, x + w - 20, cy + chip_h], radius=14,
+                               fill=blend(PANEL_BG, tone, 0.18), outline=tone, width=2)
+        for line in wrap_text(draw, step, chip_f, w - 76)[:1]:
+            tw = draw.textlength(line, font=chip_f)
+            draw.text((x + (w - tw) / 2, cy + (chip_h - 26) / 2), line, font=chip_f, fill=WHITE)
+        cy += chip_h
+        if not last:
+            draw_down_arrow(draw, x + w / 2, cy + 2, cy + gap - 2, color=ACCENT)
+            cy += gap
+    return y + card_h
+
+
+def draw_cover_visual(draw, x, y, w, visual):
+    """Dispatches to the cover-visual style Gemini chose for today's topic
+    (code-diff or step-diagram), falling back to the older two-card
+    before/after layout if the response didn't include either."""
+    style = visual.get("style")
+    if not style:
+        style = "code" if visual.get("code_before") else ("diagram" if visual.get("diagram_steps") else "cards")
+    if style == "code":
+        return draw_cover_code_diff(draw, x, y, w, visual)
+    if style == "diagram":
+        return draw_cover_diagram(draw, x, y, w, visual)
+    return draw_cover_compare(draw, x, y, w, visual)
+
+
+def render_title_slide(slide, index, total, out_path, variant=None):
+    variant = variant or COVER_VARIANTS[0]
+    side = variant.get("side", "right")
+    pose = variant.get("pose", "pointing")
+    mirror = side == "left"
+
     img = make_background(seed=f"{TODAY}-title")
     draw = ImageDraw.Draw(img)
     kicker = slide.get("kicker", "JS DEEP DIVE")
@@ -837,25 +952,37 @@ def render_title_slide(slide, index, total, out_path):
     swipe_font = load_font("DejaVuSans-Bold.ttf", 27)
     draw.text((margin, y + 16), "SWIPE TO LEARN  →", font=swipe_font, fill=ACCENT)
 
-    # Mascot on the right, "presenting" the before/after cards below-left of him
+    # Mascot on today's chosen side, "presenting" the before/after visual on
+    # the opposite side of him. Layout + pose rotate daily via `variant`.
     avatar_h = 620
-    # "pointing" pose, so he looks like he's presenting the comparison cards
-    avatar = load_avatar_cutout(avatar_h, path=get_avatar_pose("pointing"))
-    ax = W - margin - (avatar.width if avatar else 300) + 26
+    avatar = load_avatar_cutout(avatar_h, path=get_avatar_pose(pose))
+    avatar_w = avatar.width if avatar else 300
+    if mirror:
+        ax = margin - 26
+    else:
+        ax = W - margin - avatar_w + 26
     ay = H - 140 - avatar_h
 
-    # cards sit in the lower-left, clear of the speech bubble above them
     compare_w = 460
-    compare_h = 2 * 112 + 46
-    compare_top = H - 170 - compare_h
     visual = slide.get("cover_visual") or {}
-    draw_cover_compare(draw, margin, compare_top, compare_w, visual)
+    v_style = visual.get("style") or ("code" if visual.get("code_before") else
+                                       ("diagram" if visual.get("diagram_steps") else "cards"))
+    if v_style == "diagram":
+        n_steps = max(2, min(4, len(visual.get("diagram_steps") or []) or 2))
+        compare_h = n_steps * 52 + (n_steps - 1) * 20 + 40
+    elif v_style == "cards":
+        compare_h = 2 * 112 + 46
+    else:
+        compare_h = 230
+    compare_top = H - 170 - compare_h
+    compare_x = (W - margin - compare_w) if mirror else margin
+    draw_cover_visual(draw, compare_x, compare_top, compare_w, visual)
 
     if avatar:
         # soft spotlight so he stands out from the busy background
         glow = Image.new("RGB", (W, H), (0, 0, 0))
         gd = ImageDraw.Draw(glow)
-        gcx, gcy = ax + avatar.width / 2, ay + avatar_h * 0.62
+        gcx, gcy = ax + avatar_w / 2, ay + avatar_h * 0.62
         gd.ellipse([gcx - 250, gcy - 300, gcx + 250, gcy + 300],
                    fill=blend((0, 0, 0), ACCENT, 0.18))
         glow = glow.filter(ImageFilter.GaussianBlur(radius=60))
@@ -863,22 +990,31 @@ def render_title_slide(slide, index, total, out_path):
         draw = ImageDraw.Draw(img)
 
         # bubble beside his head, tail pointing at his face, sitting clear
-        # above the comparison cards
+        # above the comparison visual
         bubble_font = load_font("DejaVuSans-Bold.ttf", 25)
         line = slide.get("avatar_line") or "Hey Devs! Let me show you what actually goes wrong here."
         head_cy = ay + 112
-        b_left, b_top, b_h = draw_side_speech_bubble(
-            draw, ax + 26, head_cy, line, bubble_font, box_w=430
+        bubble_side = "left" if mirror else "right"
+        anchor_x = (ax + avatar_w - 26) if mirror else (ax + 26)
+        b_left, b_top, b_h, b_right = draw_side_speech_bubble(
+            draw, anchor_x, head_cy, line, bubble_font, box_w=430, side=bubble_side
         )
 
         img.paste(avatar, (ax, ay), avatar)
         draw = ImageDraw.Draw(img)
 
-        # smooth curved pointer from under the bubble down to the cards, so
-        # the mascot reads as presenting the comparison, not just standing
-        x0, y0 = b_left + 80, b_top + b_h + 6
-        x2, y2 = margin + compare_w * 0.45, compare_top - 14
-        x1, y1 = x0 - 40, (y0 + y2) / 2
+        # smooth curved pointer from under the bubble down to the visual, so
+        # the mascot reads as presenting it, not just standing
+        if mirror:
+            x0, y0 = b_right - 80, b_top + b_h + 6
+            x1 = x0 + 40
+            x2 = compare_x + compare_w * 0.55
+        else:
+            x0, y0 = b_left + 80, b_top + b_h + 6
+            x1 = x0 - 40
+            x2 = compare_x + compare_w * 0.45
+        y2 = compare_top - 14
+        y1 = (y0 + y2) / 2
         pts = []
         for i in range(21):
             t = i / 20
@@ -1033,6 +1169,13 @@ def panel_metrics(draw, panel, content_w, s):
         if draw.textlength(result, font=fonts["res"]) + int(60 * s) > content_w:
             fits = False
 
+    plain = panel.get("plain")
+    if plain:
+        plain_font = load_font("DejaVuSans-Oblique.ttf", 16) or load_font("DejaVuSans.ttf", 16)
+        plain_lines = wrap_text(draw, plain, plain_font, content_w)[:2]
+        extras["plain_lines"] = plain_lines
+        h += len(plain_lines) * 20 + 12
+
     return h, fits, extras
 
 
@@ -1143,6 +1286,15 @@ def render_panel(draw, x, y, w, h, panel):
                                fill=blend(PANEL_BG, tone, 0.22), outline=tone, width=2)
         draw_status_badge(draw, bx + int(19 * s), by + bh / 2, max(8, int(11 * s)), neg)
         draw.text((bx + int(36 * s), by + (bh - int(22 * s)) / 2), result, font=rf, fill=tone)
+        cy = by + bh
+
+    plain_lines = extras.get("plain_lines")
+    if plain_lines:
+        plain_font = load_font("DejaVuSans-Oblique.ttf", 16) or load_font("DejaVuSans.ttf", 16)
+        py = min(cy + 10, y + h - len(plain_lines) * 20 - 8)
+        for line in plain_lines:
+            draw.text((content_x, py), line, font=plain_font, fill=MUTED)
+            py += 20
 
 
 def draw_series_banner(draw, cy, text="JAVASCRIPT DEEP DIVE SERIES"):
@@ -1276,13 +1428,13 @@ def render_summary_slide(slide, index, total, out_path):
     img.save(out_path, "PNG")
 
 
-def render_slide(slide, index, total, out_path):
+def render_slide(slide, index, total, out_path, variant=None, topic=None):
     # Preferred path: let the image model lay out the whole slide (background
     # from the reference image + infographics + text). If that isn't available
     # for this account, or fails for this slide, fall back to the procedural
     # PIL renderer below, which always works.
     if SLIDE_IMAGE_MODE == "ai":
-        ai_img = generate_slide_image_ai(slide, index, total)
+        ai_img = generate_slide_image_ai(slide, index, total, variant=variant, topic=topic)
         if ai_img is not None:
             ai_img.save(out_path, "PNG")
             return
@@ -1293,7 +1445,7 @@ def render_slide(slide, index, total, out_path):
 
     kind = slide.get("type", "content")
     if kind == "title":
-        render_title_slide(slide, index, total, out_path)
+        render_title_slide(slide, index, total, out_path, variant=variant)
     elif kind == "summary":
         render_summary_slide(slide, index, total, out_path)
     else:
@@ -1379,6 +1531,62 @@ def save_topic_history(history):
         json.dump(trimmed, f, indent=2)
 
 
+# ---------------------------------------------------------------------------
+# Trending signal: best-effort pull of what's actually being discussed today
+# in the JS/React/Next.js community, so topic selection can lean toward
+# genuine current buzz instead of only the model's trained sense of what's
+# "typically" interesting. Both sources are free/public, no API key needed.
+# If both fail (network, rate limit, blocked), choose_topic() just proceeds
+# without this context - it's a bonus signal, never a hard dependency.
+# ---------------------------------------------------------------------------
+TRENDING_SUBREDDITS = ("javascript", "reactjs", "nextjs")
+
+
+def fetch_trending_signals():
+    signals = []
+    headers = {"User-Agent": "modernjavascripthub-daily-poster/1.0"}
+
+    try:
+        resp = requests.get(
+            "https://hn.algolia.com/api/v1/search_by_date",
+            params={
+                "tags": "story",
+                "query": "javascript OR react OR nextjs OR typescript OR v8",
+                "hitsPerPage": 20,
+            },
+            timeout=15,
+        )
+        if resp.ok:
+            for hit in resp.json().get("hits", [])[:20]:
+                title = (hit.get("title") or "").strip()
+                if title:
+                    signals.append(f"[Hacker News] {title}")
+        else:
+            print(f"Trending signal: Hacker News returned {resp.status_code}.", file=sys.stderr)
+    except requests.RequestException as e:
+        print(f"Trending signal: Hacker News fetch failed: {e}", file=sys.stderr)
+
+    for sub in TRENDING_SUBREDDITS:
+        try:
+            resp = requests.get(
+                f"https://www.reddit.com/r/{sub}/top.json",
+                params={"t": "day", "limit": 8},
+                headers=headers,
+                timeout=15,
+            )
+            if resp.ok:
+                for child in resp.json().get("data", {}).get("children", []):
+                    title = (child.get("data", {}).get("title") or "").strip()
+                    if title:
+                        signals.append(f"[r/{sub}] {title}")
+            else:
+                print(f"Trending signal: r/{sub} returned {resp.status_code}.", file=sys.stderr)
+        except requests.RequestException as e:
+            print(f"Trending signal: r/{sub} fetch failed: {e}", file=sys.stderr)
+
+    return signals[:35]
+
+
 def choose_topic(history):
     """Ask Gemini to pick today's specific topic itself, within SUBJECTS,
     avoiding anything already covered recently. Raises on total failure so
@@ -1393,13 +1601,36 @@ def choose_topic(history):
     )
     examples_block = "\n".join(f"- {t}" for t in STYLE_EXAMPLES)
 
+    trending = fetch_trending_signals()
+    if trending:
+        trending_block = (
+            "Here is what's ACTUALLY being discussed today in the JS/React/"
+            "Next.js community (real titles from Hacker News + Reddit, pulled "
+            "minutes ago) - use these only as a signal for what topics/themes "
+            "are currently generating real interest and engagement, so today's "
+            "pick is more likely to resonate and get shared. Do not just copy "
+            "a title or turn it into a news recap - find the underlying "
+            "advanced JS/React/Next.js concept behind the buzz and turn THAT "
+            "into our narrow, commonly-misunderstood-bug format:\n"
+            + "\n".join(f"- {t}" for t in trending)
+        )
+    else:
+        trending_block = (
+            "(No live trending data available today - pick based on what "
+            "generally drives high engagement/shares in the JS/React/Next.js "
+            "developer community.)"
+        )
+
     prompt = f"""You are picking today's topic for "Modern JavaScript Hub", an
 Instagram/Telegram account teaching {SUBJECTS} to intermediate/senior
-developers.
+developers. Growing this account's reach matters as much as technical depth,
+so favor topics that are genuinely likely to be shared/saved, not just
+correct.
 
 The topic must be ADVANCED and NARROW - never a beginner definition or a
-broad category name. Pick ONE of these two flavours (vary between them across
-days, roughly half and half):
+broad category name. Pick ONE of these three flavours (vary across days,
+leaning toward (c) whenever the trending signal below gives you something
+strong to work with):
 
   (a) A specific commonly-misunderstood behavior or mistake experienced
       developers actually make in real code.
@@ -1411,10 +1642,17 @@ days, roughly half and half):
       you are actually confident exist and are correct about - if you are not
       certain a feature shipped or how it behaves, choose flavour (a)
       instead. Never invent a release, version number, or API.
+  (c) The advanced concept underneath whatever is genuinely trending right
+      now in the JS/React/Next.js community today (see the real discussion
+      titles below) - still narrow and technically precise, just chosen
+      because it's currently top-of-mind for developers, which tends to get
+      more shares/saves/comments.
 
 For calibration, here is the STYLE and DEPTH expected (these are flavour (a)
 examples; do not just reuse them, they're only examples):
 {examples_block}
+
+{trending_block}
 
 {avoid_block}
 
@@ -1481,8 +1719,13 @@ def build_carousel(topic, research):
 Telegram account ({BRAND_HANDLE}) that teaches ADVANCED JavaScript, React,
 and Next.js to intermediate/senior developers - the non-obvious stuff that
 causes real bugs, not textbook basics. Tone: clear, confident, precise -
-like a sharp senior engineer explaining a bug in code review. Every claim
-must be technically correct per the research below.
+like a sharp senior engineer explaining a bug in code review, in plain
+language a reader can follow on a quick scroll. Keep the TOPIC advanced and
+narrow, but keep the EXPLANATION simple: prefer short, everyday words and a
+quick analogy over dense jargon, and always pair any technical term (hidden
+class, tree-shaking, memoization, etc.) with a one-clause plain-English
+translation the first time it's used. Every claim must be technically
+correct per the research below.
 
 Topic: {topic}
 
@@ -1509,10 +1752,21 @@ Produce a JSON object (ONLY JSON, no markdown fences) with this exact shape:
         hook. e.g. 'Hey Devs! Did you know delete can make your objects up to
         10x slower? Let me show you why!'",
       "cover_visual": {{
-        "bad_label": "2-4 words naming the wrong/slow approach, e.g. 'delete obj.key'",
-        "bad_note": "2-4 word consequence, e.g. '10x slower'",
-        "good_label": "2-4 words naming the right/fast approach, e.g. 'obj.key = null'",
-        "good_note": "2-4 word benefit, e.g. 'stays optimized'"
+        "style": "'code' if the bug/fix is best shown as one real short line of
+          code before vs after, 'diagram' if it's better shown as a short
+          chain of 2-4 concept steps that don't reduce to one code line -
+          pick whichever genuinely fits THIS topic, don't default to the same
+          one every time",
+        "bad_label": "1-2 word tag for the 'before'/wrong side, e.g. 'Before'",
+        "good_label": "1-2 word tag for the 'after'/right side, e.g. 'After'",
+        "code_before": "REQUIRED if style=code: the actual short buggy code
+          line for this topic, <=26 characters, e.g. 'delete obj.key'",
+        "code_after": "REQUIRED if style=code: the actual short fixed code
+          line for this topic, <=26 characters, e.g. 'obj.key = null'",
+        "diagram_steps": "REQUIRED if style=diagram: an array of 2-4 short
+          (<=20 character) step labels specific to this topic's actual
+          mechanism, in order, e.g. ['Object has a shape', 'delete runs',
+          'Shape invalidated', 'Falls to dict mode']"
       }}
     }},
     {{
@@ -1524,7 +1778,7 @@ Produce a JSON object (ONLY JSON, no markdown fences) with this exact shape:
         real-world impact over time, chart=data/comparison/impact, star=pro
         tip/bonus insight)",
       "panels": [
-        {{"title": "short 2-3 word panel label fitting this panel's role, e.g. 'Code Input', 'Buggy Code', 'The Fix', 'Console Output', 'Why It Happens', 'Real Impact', 'Pro Tip'", "kind": "code | flow | output (pick whichever best fits this panel's content)", "lines": ["for kind=code: up to 5 short code lines, <=30 chars each. for kind=flow: 2-4 short labels <=26 chars, sequential steps/facts. for kind=output: 2-4 short values/lines <=20 chars each"], "result": "optional short verified/result/takeaway label, <=22 chars"}}
+        {{"title": "short 2-3 word panel label fitting this panel's role, e.g. 'Code Input', 'Buggy Code', 'The Fix', 'Console Output', 'Why It Happens', 'Real Impact', 'Pro Tip'", "kind": "code | flow | output (pick whichever best fits this panel's content)", "lines": ["for kind=code: up to 5 short code lines, <=30 chars each. for kind=flow: 2-4 short labels <=26 chars, sequential steps/facts. for kind=output: 2-4 short values/lines <=20 chars each"], "result": "optional short verified/result/takeaway label, <=22 chars", "plain": "ONE short plain-English sentence, <=14 words, NO code and NO jargon, explaining in everyday terms why this specific panel matters or what it means for the reader - written so a developer who is not deeply familiar with engine/runtime internals still gets the point"}}
       ]
     }},
     ... exactly 6 of these "content" slides total, each with exactly 4
@@ -1551,11 +1805,25 @@ Produce a JSON object (ONLY JSON, no markdown fences) with this exact shape:
       "cta": "Follow {BRAND_HANDLE} for daily JS/React/Next.js deep dives"
     }}
   ],
-  "caption": "an SEO-friendly Instagram caption, 3-5 sentences: first
-    sentence is a scroll-stopping hook naming the specific bug/topic, then
-    deliver real value in plain language, then a short call to action to
-    save/share/follow. Do NOT include hashtags in this field, and do not
-    list keywords in this field either - keywords go in seo_keywords below.",
+  "caption_hook": "ONE single short sentence/question, <=18 words, naming
+    the specific bug/topic in plain language, no jargon - this is ONLY the
+    opening line, never a paragraph. WRONG: cramming the whole explanation
+    into this one field. RIGHT: 'Ever deleted one key and watched your app
+    get 10x slower?'",
+  "caption_points": [
+    "EXACTLY 3 to 4 array entries (never fewer, never merged into one
+     string). Each entry is its OWN separate short sentence, <=15 words,
+     ONE idea only, plain English, no code. Together they let someone fully
+     get the concept without reading the slides. Example of the CORRECT
+     shape (4 separate short array entries, not one paragraph):
+     ['delete does not just remove a key - it changes the object internally.',
+      'That change can push the object into a slower mode for good.',
+      'Assigning undefined instead keeps the fast path intact.',
+      'This is an easy mistake that quietly hurts performance.']"
+  ],
+  "caption_takeaway": "one short closing line, <=15 words, plain language,
+    a clear call to action to save/share/follow - may start with a relevant
+    emoji like 💡 or 👉",
   "seo_keywords": [
     "3 to 5 high-search-volume, evergreen keyword phrases developers
      actually search for around this exact topic (e.g. 'javascript
@@ -1598,29 +1866,87 @@ summary)."""
 
     if not parsed.get("slides"):
         raise RuntimeError(f"Gemini response missing slides: {parsed}")
-    if not parsed.get("caption"):
-        raise RuntimeError(f"Gemini response missing caption: {parsed}")
+    if not parsed.get("caption_hook") or not parsed.get("caption_points"):
+        raise RuntimeError(f"Gemini response missing caption_hook/caption_points: {parsed}")
     parsed.setdefault("hashtags", [])
     parsed.setdefault("seo_keywords", [])
+    parsed.setdefault("caption_takeaway", f"Follow {BRAND_HANDLE} for more like this.")
     return parsed
 
 
 # ---------------------------------------------------------------------------
 # Caption assembly (Instagram: rich SEO caption; Telegram: shorter variant)
 # ---------------------------------------------------------------------------
-def build_captions(caption, seo_keywords, hashtags):
+def _split_sentences(text):
+    text = (text or "").strip()
+    if not text:
+        return []
+    return [p.strip() for p in re.split(r"(?<=[.!?])\s+", text) if p.strip()]
+
+
+def _normalize_caption_parts(hook, points, takeaway):
+    """Best-effort LOCAL enforcement of the bullet-point shape, since Gemini
+    doesn't reliably keep captions short/separate even when the prompt asks
+    for it - it can dump a whole paragraph into caption_hook, or return one
+    long run-on caption_points entry. This guarantees the final caption is
+    always genuinely bulleted, regardless of what shape Gemini's response
+    actually came back in."""
+    hook = str(hook or "").strip()
+    points = [str(p).strip() for p in (points or []) if str(p).strip()]
+    takeaway = str(takeaway or "").strip()
+
+    # If "hook" is really a multi-sentence paragraph, keep only the first
+    # sentence as the hook and feed the rest back in as points.
+    hook_sentences = _split_sentences(hook)
+    if len(hook_sentences) > 1:
+        hook, extra = hook_sentences[0], hook_sentences[1:]
+        points = extra + points
+    elif len(hook_sentences) == 1:
+        hook = hook_sentences[0]
+
+    # Any point that's itself a run-on (multiple sentences, or one very long
+    # sentence with no punctuation to split on) gets broken up further.
+    expanded = []
+    for p in points:
+        sentences = _split_sentences(p)
+        if len(sentences) > 1:
+            expanded.extend(sentences)
+        elif len(p.split()) > 22:
+            clauses = [c.strip() for c in re.split(r",\s+| - |;\s+", p) if c.strip()]
+            expanded.extend(clauses if len(clauses) > 1 else [p])
+        else:
+            expanded.append(p)
+
+    return hook, expanded[:5], takeaway
+
+
+def _build_caption_body(hook, points, takeaway):
+    """Scannable bullet-point body: hook line, then a bullet per point, then
+    a closing takeaway - instead of one dense paragraph."""
+    hook, points, takeaway = _normalize_caption_parts(hook, points, takeaway)
+    lines = [hook] if hook else []
+    for p in points:
+        lines.append(f"• {p}")
+    if takeaway:
+        lines.append(takeaway)
+    return lines
+
+
+def build_captions(caption_hook, caption_points, caption_takeaway, seo_keywords, hashtags):
     hashtags = [h if h.startswith("#") else f"#{h}" for h in hashtags]
     seo_line = "[" + ", ".join(seo_keywords) + "]" if seo_keywords else ""
+    body_lines = _build_caption_body(caption_hook, caption_points, caption_takeaway)
 
-    # Layout, both platforms: caption -> 2 line breaks -> [SEO keywords] ->
-    # 2 line breaks -> hashtags.
+    # Layout, both platforms: hook -> bullet points -> takeaway -> blank ->
+    # [SEO keywords] -> blank -> hashtags.
     #
     # Instagram's app collapses a plain blank line (no visible character on
     # it), so the usual fix is to put an invisible Braille-blank character
     # (U+2800) on that line instead of leaving it truly empty - it still
     # reads as a blank line to the viewer but survives Instagram's collapsing.
     ig_gap = "\n⠀\n"
-    ig_parts = [caption.strip()]
+    ig_body = "\n".join(body_lines)
+    ig_parts = [ig_body]
     if seo_line:
         ig_parts.append(seo_line)
     ig_parts.append(" ".join(hashtags[:15]))
@@ -1629,7 +1955,8 @@ def build_captions(caption, seo_keywords, hashtags):
 
     # Telegram doesn't collapse blank lines, so plain double newlines are enough.
     tg_gap = "\n\n"
-    tg_parts = [caption.strip()]
+    tg_body = "\n".join(body_lines)
+    tg_parts = [tg_body]
     if seo_line:
         tg_parts.append(seo_line)
     tg_parts.append(" ".join(hashtags[:5]))
@@ -1666,15 +1993,24 @@ def main():
     slides = carousel["slides"]
     total = len(slides)
 
+    cover_variant = choose_cover_variant(history)
+    print(f"Cover layout chosen: {cover_variant['id']}", file=sys.stderr)
+
     filenames = []
     for i, slide in enumerate(slides, start=1):
         fname = f"{TODAY}-slide{i}.png"
         out_path = os.path.join(IMAGES_DIR, fname)
-        render_slide(slide, i, total, out_path)
+        variant = cover_variant if slide.get("type") == "title" else None
+        slide_topic = topic if slide.get("type") == "title" else None
+        render_slide(slide, i, total, out_path, variant=variant, topic=slide_topic)
         filenames.append(fname)
 
     ig_caption, tg_caption = build_captions(
-        carousel["caption"], carousel.get("seo_keywords", []), carousel.get("hashtags", [])
+        carousel.get("caption_hook", ""),
+        carousel.get("caption_points", []),
+        carousel.get("caption_takeaway", ""),
+        carousel.get("seo_keywords", []),
+        carousel.get("hashtags", []),
     )
 
     with open(os.path.join(BUILD_DIR, "caption_instagram.txt"), "w", encoding="utf-8") as f:
@@ -1689,7 +2025,7 @@ def main():
             indent=2,
         )
 
-    history.append({"date": TODAY, "topic": topic})
+    history.append({"date": TODAY, "topic": topic, "cover_variant": cover_variant["id"]})
     save_topic_history(history)
 
     print(f"IMAGE_FILENAMES={','.join(filenames)}")
