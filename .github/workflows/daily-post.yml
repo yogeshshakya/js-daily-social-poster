@@ -2,18 +2,11 @@ name: Daily JS/React/Next.js post
 
 on:
   schedule:
-    # Target: 7:00 AM IST (01:30 UTC).
-    #
-    # GitHub's scheduler is best-effort: scheduled runs are delayed during
-    # periods of high load, and heavily queued ones can be dropped entirely.
-    # ":00" and ":30" are the busiest slots, so these use odd minutes, and
-    # three attempts are queued around the target time. The "already posted
-    # today?" guard below makes sure only the first one that actually runs
-    # posts anything - the others exit immediately.
-    - cron: "26 1 * * *"   # 06:56 IST
-    - cron: "44 1 * * *"   # 07:14 IST
-    - cron: "12 2 * * *"   # 07:42 IST
-  workflow_dispatch: {}   # manual run from the Actions tab (always runs)
+    # 01:30 UTC = 07:00 (7 AM) IST, every day.
+    # Note: GitHub runs scheduled workflows on a best-effort basis and can
+    # start them late (sometimes hours) when Actions is under load.
+    - cron: "30 1 * * *"
+  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
 
 permissions:
   contents: write
@@ -26,43 +19,17 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Has today's post already gone out?
-        id: guard
-        run: |
-          TODAY=$(TZ=Asia/Kolkata date +%F)
-          echo "Today in IST: $TODAY"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual run - always proceeding."
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          LAST=""
-          if [ -f data/last_post.json ]; then
-            LAST=$(python3 -c "import json;print(json.load(open('data/last_post.json')).get('posted_date',''))")
-          fi
-          echo "Last recorded post: ${LAST:-none}"
-          if [ "$LAST" = "$TODAY" ]; then
-            echo "Already posted today - this queued attempt will exit."
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - uses: actions/setup-python@v6
-        if: steps.guard.outputs.should_run == 'true'
         with:
           python-version: "3.12"
 
       - name: Install system fonts
-        if: steps.guard.outputs.should_run == 'true'
         run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
 
       - name: Install Python dependencies
-        if: steps.guard.outputs.should_run == 'true'
         run: pip install -r requirements.txt
 
       - name: Generate today's carousel content + images
-        if: steps.guard.outputs.should_run == 'true'
         id: generate
         working-directory: scripts
         env:
@@ -78,7 +45,6 @@ jobs:
         run: python generate.py > /tmp/generate_output.txt; status=$?; cat /tmp/generate_output.txt; exit $status
 
       - name: Extract image filenames
-        if: steps.guard.outputs.should_run == 'true'
         id: filenames
         run: |
           FILES=$(grep '^IMAGE_FILENAMES=' /tmp/generate_output.txt | cut -d= -f2)
@@ -86,7 +52,6 @@ jobs:
           echo "Generated files: $FILES"
 
       - name: Commit and push generated images
-        if: steps.guard.outputs.should_run == 'true'
         id: commit
         run: |
           git config user.name "github-actions[bot]"
@@ -103,7 +68,6 @@ jobs:
           echo "SHA=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build image paths + raw URLs
-        if: steps.guard.outputs.should_run == 'true'
         id: urls
         run: |
           IFS=',' read -ra FILES <<< "${{ steps.filenames.outputs.IMAGE_FILENAMES }}"
@@ -118,7 +82,6 @@ jobs:
           echo "RAW_IMAGE_URLS=${URLS%,}" >> "$GITHUB_OUTPUT"
 
       - name: Post to Telegram + Instagram
-        if: steps.guard.outputs.should_run == 'true'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT: ${{ secrets.TELEGRAM_CHAT }}
@@ -133,15 +96,3 @@ jobs:
           CAPTION_FILE_TELEGRAM: build/caption_telegram.txt
         run: python scripts/post.py
 
-      - name: Record that today's post went out
-        if: steps.guard.outputs.should_run == 'true'
-        run: |
-          TODAY=$(TZ=Asia/Kolkata date +%F)
-          mkdir -p data
-          printf '{"posted_date": "%s", "run_id": "%s"}\n' "$TODAY" "${{ github.run_id }}" > data/last_post.json
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/last_post.json
-          git commit -m "Record post for $TODAY"
-          git pull --rebase
-          git push
