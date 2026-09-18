@@ -67,5 +67,10 @@
     "date": "2026-09-17",
     "topic": "Why wrapping a component in `React.memo` is completely bypassed when it receives JSX children, because the `children` prop is transpiled into a new object reference on every parent render, rendering the shallow comparison useless unless those children are explicitly memoized.",
     "cover_variant": "right_thinking"
+  },
+  {
+    "date": "2026-09-18",
+    "topic": "Why importing a React Server Component directly inside a Client Component file silently forces it to run as a Client Component, and how passing it as a 'children' prop preserves its server-only execution.",
+    "cover_variant": "left_pointing"
   }
 ]
