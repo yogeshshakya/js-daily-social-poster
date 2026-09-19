@@ -72,5 +72,10 @@
     "date": "2026-09-18",
     "topic": "Why importing a React Server Component directly inside a Client Component file silently forces it to run as a Client Component, and how passing it as a 'children' prop preserves its server-only execution.",
     "cover_variant": "left_pointing"
+  },
+  {
+    "date": "2026-09-19",
+    "topic": "Why using React's `useDeferredValue` to optimize expensive rendering fails to prevent UI stutter unless the child component receiving the deferred value is wrapped in `React.memo`, because React will otherwise still re-render the child subtree with the old value during the urgent render phase",
+    "cover_variant": "left_excited"
   }
 ]
