@@ -382,6 +382,33 @@ in `scripts/generate.py`) to create today's base background texture, using
   (see below) to see which image-generation models, if any, your API key
   currently has access to.
 
+### Image-request throttling (avoiding 429s)
+
+A single `ai`-mode run makes up to ~9 separate image-generation calls
+(1 background + 8 slides), each of which can try up to 2 candidate models -
+so up to ~18 requests, with nothing pacing them. Fired back-to-back with no
+gap, that alone can trip Google's **per-minute** rate limit even when your
+per-day quota is fine, which shows up as a 429 "You exceeded your current
+quota" error (see "Slide rendering" above).
+
+`_throttle_image_request()` in `scripts/generate.py` now enforces a minimum
+gap between any two outgoing image requests: before each one, it waits
+until at least `IMAGE_REQUEST_MIN_GAP_SECONDS` (default **8 seconds**) have
+passed since the previous request finished. This applies uniformly to the
+background call, every slide, and every candidate-model retry within a
+call - it's a simple sequential queue, not real concurrency, so requests
+never actually overlap.
+
+- Override the gap with the `IMAGE_REQUEST_MIN_GAP_SECONDS` env var / repo
+  secret (e.g. `15` if you're still hitting 429s, or `0` to disable it
+  entirely and go back to unthrottled back-to-back requests).
+- This only spaces out requests within a single run - it does not change
+  your account's actual rate limit or quota, and does not retry a request
+  that already failed with 429 (see "Slide rendering" above for what to do
+  when a run still fails after this).
+- Watch for `Image request throttle: waiting Ns before the next
+  image-generation call.` in the logs to see it in action.
+
 ## One-time setup
 
 ### 1. Create the repo
@@ -402,6 +429,7 @@ repository secret**, and add each of these:
 | `GEMINI_MODEL` *(optional)* | pin a specific text-generation model instead of the automatic fallback list |
 | `IMAGE_MODEL` *(optional)* | pin a specific image-generation model instead of the automatic fallback list |
 | `SLIDE_IMAGE_MODE` *(optional)* | `ai` (default) or `procedural` - see "Slide rendering" below |
+| `IMAGE_REQUEST_MIN_GAP_SECONDS` *(optional)* | minimum seconds between image-generation requests, default `8` - see "Image-request throttling" below |
 | `FB_PAGE_ID` *(optional)* | numeric Facebook Page ID - set with the next one to also post to Facebook |
 | `FB_PAGE_TOKEN` *(optional)* | that Page's own access token (not your user token) |
 
