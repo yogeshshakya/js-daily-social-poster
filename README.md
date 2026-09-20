@@ -15,38 +15,42 @@ Every day at 7:00 AM IST, this repo's GitHub Actions workflow:
    (written from the model's own knowledge; Google Search grounding is not
    used since it isn't available on free-tier API keys - see the note in
    `scripts/generate.py`'s `research_topic()`).
-2. Turns that research into an **8-slide carousel script** following a full
-   narrative arc: title/hook -> the problem -> why it happens -> the fix ->
-   how the fix works -> real-world impact -> a related pro tip ->
-   takeaway/follow-CTA. The topic itself stays advanced and narrow, but the
-   writing is instructed to explain it in **plain language** - short words, a
-   quick analogy, and a one-clause translation the first time a technical
-   term is used - and every content-slide panel also carries a one-line
-   `plain` caption (no code, no jargon) rendered under the panel so a reader
-   who isn't deep into engine/runtime internals still gets the point.
+2. Turns that research into an **8-slide carousel script** using a
+   user-authored prompt (`CAROUSEL_PROMPT_TEMPLATE` in `scripts/generate.py`,
+   used verbatim - only `{topic}`/`{research}` are substituted) that follows a
+   fixed narrative arc, one fixed `type` per slide: `hook` -> `simple_explanation`
+   -> `code_example` -> `flow` -> `under_the_hood` -> `common_mistake` ->
+   `better_approach` -> `summary`. Each slide comes back as a flat object -
+   `title`, `content`, `code`, `visual_type`, `visual_story`, `infographic`,
+   `highlight`, `design_emphasis` - instead of the old nested panel/heading
+   structure. The topic itself stays advanced and narrow, but the writing is
+   instructed to explain it in **plain language** - short sentences, small
+   analogies, and a one-clause translation the first time a technical term is
+   used. The prompt explicitly tells Gemini **not** to include the mascot on
+   any of these 8 slides' AI-generated artwork (see "Slide rendering" below) -
+   the educational content/infographic is the visual focus there.
 3. Renders each slide as a 1080x1350 image on a **deep-blue background**.
    The base texture is generated fresh each day by asking a Gemini
    image-generation model to produce an abstract navy/circuit-pattern
    texture in the style of `assets/bg_reference.jpg` (best-effort - see
    "AI background generation" below); the same hand-drawn circuit-line/node
    overlay is then drawn on top either way, so every slide still looks
-   consistent even when AI generation isn't available. The 6 middle slides
-   use a **4-panel infographic layout** with small connector-arrow icons
-   between panels so the grid reads as one flow rather than four separate
-   boxes, plus a small role icon (bug/warning/idea/clock/chart/star) next to
-   each slide's heading; panel titles/content adapt to what each slide is
-   actually showing (code input/output, step lists, scenario/impact, etc).
-   The title/thumbnail slide is built as a proper cover: a red warning
-   banner, an amber headline, the mascot (background auto-removed) posed and
-   placed under a soft spotlight with a speech bubble beside his head (tail
-   pointing at his face) where he talks to the viewer, a curved pointer
-   leading down to **a visual that reflects today's actual topic** - either a
-   real before/after code-diff card or a short step-by-step diagram of the
-   underlying mechanism, whichever Gemini judges fits the topic (see "Cover
-   visual: code-diff or diagram, chosen per topic" below) - and an "ADVANCED"
-   difficulty badge. **The mascot side/pose also rotates daily** so
-   consecutive posts don't look like the same template - see "Cover layout
-   rotation" below. Only that slide has the mascot, as requested.
+   consistent even when AI generation isn't available. The 6 middle "body"
+   slides (`simple_explanation` through `better_approach`) use a full-width
+   layout driven by that slide's own fields: heading, body paragraph, an
+   optional code block (when `code` is set), and an optional highlighted
+   takeaway line (when `highlight` is set) - plus a small role icon
+   (bug/warning/idea/clock/star) next to the heading. The hook/thumbnail
+   slide is built with its own **user-authored image prompt**
+   (`THUMBNAIL_PROMPT_TEMPLATE`, also used verbatim - see "Thumbnail: a
+   user-authored, ever-changing prompt" below) that creatively places the
+   mascot as part of the story; the procedural PIL fallback for that slide
+   still draws a red warning banner (from `highlight`), an amber headline
+   (from `title`), the mascot under a soft spotlight with a speech bubble
+   (from `content`), and an "ADVANCED" difficulty badge. **The mascot
+   side/pose also rotates daily** so consecutive posts don't look like the
+   same template - see "Cover layout rotation" below. Only that slide has the
+   mascot.
 4. Writes an Instagram caption as **short scannable bullet points** instead
    of a paragraph: one hook line, 3-4 plain-language bullet points that on
    their own explain the concept, and a one-line takeaway/CTA - followed by
@@ -181,6 +185,12 @@ If you find the AI slides' text too unreliable in practice, set the
 Note this makes 8 image-generation calls per run instead of 1, so it uses
 noticeably more of your Gemini quota than the background-only mode did.
 
+The 6 body slides (`simple_explanation` .. `better_approach`) are told
+**not** to include the mascot at all - the script prompt (see below) explicitly
+instructs Gemini's script/content-generation call to leave the avatar out of
+those slides, so the educational content and infographic stay the visual
+focus. Only the hook/thumbnail slide uses the mascot.
+
 ### Cover layout rotation
 
 To stop every day's thumbnail looking like the same template with different
@@ -195,32 +205,29 @@ previous run (tracked in `data/topic_history.json` alongside the topic):
 | `right_thinking` | right | thinking |
 | `left_pointing` | left | pointing |
 
-This affects both the AI-generated cover (the prompt tells the image model
-which side the mascot stands on and which pose it's given) and the
-procedural PIL fallback (which mirrors the whole layout - avatar, speech
-bubble, and the visual it points at - left or right). To add more variety,
-add entries to `COVER_VARIANTS`.
+This affects both the AI-generated cover (the user-authored thumbnail prompt
+tells the image model which side the mascot stands on and which pose it's
+given, since that's filled in from the same `variant`) and the procedural PIL
+fallback (which mirrors the avatar + speech bubble left or right). To add
+more variety, add entries to `COVER_VARIANTS`.
 
-### Cover visual: code-diff or diagram, chosen per topic
+### Thumbnail: a user-authored, ever-changing prompt
 
-The thing the mascot points to on the cover is no longer a generic
-"before/after" label - it's built from the actual topic. In `build_carousel`'s
-prompt, Gemini fills a `cover_visual` object and picks its own `style`:
-
-- **`code`** - for topics where the bug/fix genuinely is one line of code.
-  Renders as a small code-diff card: a red "Before" line with the real buggy
-  code, an arrow, a green "After" line with the real fix
-  (`draw_cover_code_diff()`).
-- **`diagram`** - for topics that are more about an internal mechanism than
-  one code line. Renders as 2-4 connected step chips describing what
-  actually happens (`draw_cover_diagram()`), e.g. "Object has a shape" →
-  "delete removes a slot" → "Shape invalidated" → "Falls to dict mode".
-
-Gemini is told to pick whichever genuinely fits that day's topic rather than
-defaulting to one every time. If a response is missing both `code_before`
-and `diagram_steps` (e.g. an older cached script, or a partial response),
-`draw_cover_visual()` falls back to the original two-card before/after
-layout so nothing breaks.
+The hook/thumbnail slide's AI image is built from `THUMBNAIL_PROMPT_TEMPLATE`
+in `scripts/generate.py` - a long, detailed prompt supplied verbatim (only
+its bracketed placeholders like `[INSERT TOPIC HERE]` are filled in per day,
+via `build_thumbnail_prompt()`). Its core instruction is that **every
+thumbnail must look meaningfully different** from the last one: a different
+creative direction (cinematic, investigation, before/after, futuristic UI,
+comic/reaction, 3D, breaking-news, minimal editorial, visual metaphor,
+debugging scenario - the model picks whichever fits that day's topic), a
+different avatar pose/placement each time, and a fresh (but on-brand)
+background - while keeping the mascot's actual character design identical to
+`assets/avatar.png`. The six text fields it fills in (topic, label, hook,
+headline, subtitle, avatar speech) are derived from the new flat schema's
+`title`/`content`/`highlight` fields on the hook slide (see
+`build_thumbnail_prompt()` for the exact mapping), since the old
+`kicker`/`alert`/`subtitle`/`avatar_line` fields no longer exist.
 
 ### Caption: guaranteed bullet points
 
