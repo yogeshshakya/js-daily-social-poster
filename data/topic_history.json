@@ -77,5 +77,10 @@
     "date": "2026-09-19",
     "topic": "Why using React's `useDeferredValue` to optimize expensive rendering fails to prevent UI stutter unless the child component receiving the deferred value is wrapped in `React.memo`, because React will otherwise still re-render the child subtree with the old value during the urgent render phase",
     "cover_variant": "left_excited"
+  },
+  {
+    "date": "2026-09-20",
+    "topic": "Why defining a Server Action inline inside a Server Component silently serializes and transmits all referenced outer-scope variables to the client as bound arguments, leading to massive network payload bloat and accidental exposure of sensitive server-only data",
+    "cover_variant": "right_thinking"
   }
 ]
