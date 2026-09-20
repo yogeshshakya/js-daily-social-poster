@@ -26,31 +26,46 @@ Every day at 7:00 AM IST, this repo's GitHub Actions workflow:
    structure. The topic itself stays advanced and narrow, but the writing is
    instructed to explain it in **plain language** - short sentences, small
    analogies, and a one-clause translation the first time a technical term is
-   used. The prompt explicitly tells Gemini **not** to include the mascot on
-   any of these 8 slides' AI-generated artwork (see "Slide rendering" below) -
-   the educational content/infographic is the visual focus there.
-3. Renders each slide as a 1080x1350 image on a **deep-blue background**.
-   The base texture is generated fresh each day by asking a Gemini
-   image-generation model to produce an abstract navy/circuit-pattern
-   texture in the style of `assets/bg_reference.jpg` (best-effort - see
-   "AI background generation" below); the same hand-drawn circuit-line/node
-   overlay is then drawn on top either way, so every slide still looks
-   consistent even when AI generation isn't available. The 6 middle "body"
-   slides (`simple_explanation` through `better_approach`) use a full-width
-   layout driven by that slide's own fields: heading, body paragraph, an
-   optional code block (when `code` is set), and an optional highlighted
-   takeaway line (when `highlight` is set) - plus a small role icon
-   (bug/warning/idea/clock/star) next to the heading. The hook/thumbnail
-   slide is built with its own **user-authored image prompt**
-   (`THUMBNAIL_PROMPT_TEMPLATE`, also used verbatim - see "Thumbnail: a
-   user-authored, ever-changing prompt" below) that creatively places the
-   mascot as part of the story; the procedural PIL fallback for that slide
+   used. This step (the TEXT/script content) is told **not** to write the
+   mascot into the slide content itself - the avatar's actual visual
+   appearance is a separate concern, handled entirely by the image-generation
+   prompts in step 3 below.
+3. Renders each slide as a 1080x1350 image on a **deep-blue background**,
+   with the mascot appearing on **every slide, not just the cover** - each of
+   the 8 slides is built from its own **user-authored image-generation
+   prompt**, used verbatim:
+   - **Slide 1 (hook/thumbnail)**: `THUMBNAIL_PROMPT_TEMPLATE` (see
+     "Thumbnail: a user-authored, ever-changing prompt" below) - a cover
+     treatment where the avatar is an active storytelling element.
+   - **Slides 2-8 (body slides)**: `BODY_SLIDE_PROMPT_TEMPLATE` - picks one
+     visual composition per slide (code+callouts, before/after,
+     flow diagram, comparison, etc, chosen by content) and explicitly calls
+     for the avatar to appear as a "visual teacher/presenter" with a pose
+     that varies slide to slide and is never repeated, not just standing
+     passively beside the content.
+   Both templates are handed `assets/bg_reference.jpg` (as a *brand-style*
+   reference, not to be copied exactly - each slide gets a fresh background
+   treatment) and `assets/avatar.png` (the mascot, character design
+   preserved, pose/placement free to vary) - see `build_thumbnail_prompt()`
+   and `build_body_slide_prompt()` in `scripts/generate.py` for the exact
+   field mapping from the new flat schema into each template's placeholders.
+   The base background texture used for the *procedural* fallback path is
+   generated fresh each day too (best-effort - see "AI background
+   generation" below); the same hand-drawn circuit-line/node overlay is then
+   drawn on top either way, so a procedurally-rendered slide still looks
+   consistent even when AI generation isn't available. The procedural PIL
+   fallback (used only when `SLIDE_IMAGE_MODE=procedural`, or previously as
+   an automatic fallback - see "Slide rendering" below for why that's no
+   longer automatic) is simpler: it draws the mascot only on the hook slide
+   (a fixed layout can't reproduce the AI prompts' per-slide creative
+   variation), and the 6 middle body slides use a full-width text/code/
+   highlight layout with a small role icon instead - see "Slide rendering"
+   below for exactly what it draws. The hook slide's procedural fallback
    still draws a red warning banner (from `highlight`), an amber headline
    (from `title`), the mascot under a soft spotlight with a speech bubble
-   (from `content`), and an "ADVANCED" difficulty badge. **The mascot
-   side/pose also rotates daily** so consecutive posts don't look like the
-   same template - see "Cover layout rotation" below. Only that slide has the
-   mascot.
+   (from `content`), and an "ADVANCED" difficulty badge; **the mascot
+   side/pose also rotates daily** in that fallback so consecutive posts
+   don't look like the same template - see "Cover layout rotation" below.
 4. Writes an Instagram caption as **short scannable bullet points** instead
    of a paragraph: one hook line, 3-4 plain-language bullet points that on
    their own explain the concept, and a one-line takeaway/CTA - followed by
@@ -160,36 +175,63 @@ pool instead, so a post never fails purely because of this step - check the
 logs for `Gemini topic selection failed (...); falling back to local topic
 pool` to see if that happened.
 
-### Slide rendering: AI-generated slides, with a procedural safety net
+### Slide rendering: AI-generated slides, no silent fallback
 
 `SLIDE_IMAGE_MODE` (env var / optional repo secret) controls how each slide
 is drawn:
 
 - **`ai` (default)** - the image model is handed `assets/bg_reference.jpg`
-  (and, for the cover slide, `assets/avatar.png`) plus the exact text that
-  must appear, and asked to lay out the whole slide itself: same reference
-  background, infographic panels, icons, flow arrows. This gives much richer
-  visuals than the procedural renderer can.
+  and `assets/avatar.png`, plus the full user-authored prompt for that
+  slide - `THUMBNAIL_PROMPT_TEMPLATE` for the hook/cover slide,
+  `BODY_SLIDE_PROMPT_TEMPLATE` for the other 7 - and asked to lay out the
+  whole slide itself. This is the only mode that actually uses either
+  prompt's creative instructions (rotating thumbnail direction,
+  avatar-as-storyteller/presenter on every slide, etc) - the procedural
+  renderer below is a fixed template and cannot reproduce that.
 - **`procedural`** - skip AI entirely and draw every slide with PIL, which
-  always works and renders text perfectly.
+  always works and renders text perfectly, but is a fixed layout (does not
+  use `THUMBNAIL_PROMPT_TEMPLATE`'s creative-rotation instructions).
 
-Important honest caveat: image-generation models are **not reliable at
-rendering exact text**, especially code. Some slides may come back with
-misspelled words, garbled code, or invented text. Every slide therefore falls
-back to the procedural renderer automatically if generation fails, and the
-logs show which path each slide took (`AI slide 3/8: generated successfully
-with '<model>'` vs `AI slide 3/8: falling back to the procedural renderer`).
-If you find the AI slides' text too unreliable in practice, set the
-`SLIDE_IMAGE_MODE` secret to `procedural` - no code change needed.
+**If AI generation fails in `ai` mode, the run now fails loudly instead of
+silently switching to the procedural renderer.** Earlier versions of this
+script fell back automatically, which meant a quota/billing/dead-model
+problem could go unnoticed for weeks while every post quietly used the
+plain procedural layout instead of the AI-generated one. This applies to
+**every slide, not just the cover** - the background and all 8 slides each
+raise on their own if every candidate model fails for them. Check the
+`AI background: model '<model>' failed with <code>: ...` / `AI slide N/8:
+model '<model>' failed with <code>: ...` lines directly above the error for
+the exact cause. The two most common ones:
 
-Note this makes 8 image-generation calls per run instead of 1, so it uses
-noticeably more of your Gemini quota than the background-only mode did.
+- **429 "You exceeded your current quota"** - your Google AI Studio account's
+  image-generation quota/billing is the problem, not the code. Check
+  https://ai.dev/rate-limit and your plan/billing at aistudio.google.com.
+- **404 "models/... is not found for API version v1beta"** - that model name
+  no longer exists/was renamed. Check
+  https://ai.google.dev/gemini-api/docs/models for current image-model names
+  and update `IMAGE_MODEL_CANDIDATES` in `scripts/generate.py` (or set the
+  `IMAGE_MODEL` secret to pin a specific one you've confirmed works).
 
-The 6 body slides (`simple_explanation` .. `better_approach`) are told
-**not** to include the mascot at all - the script prompt (see below) explicitly
-instructs Gemini's script/content-generation call to leave the avatar out of
-those slides, so the educational content and infographic stay the visual
-focus. Only the hook/thumbnail slide uses the mascot.
+If you deliberately want the procedural renderer (e.g. while sorting out a
+quota issue), set the `SLIDE_IMAGE_MODE` secret to `procedural` - that mode
+still never fails the run over image generation, exactly as before.
+
+Note `ai` mode makes 8 image-generation calls per run instead of 1, so it
+uses noticeably more of your Gemini quota than the background-only mode did.
+
+**All 8 slides use the mascot, not just the hook.** Both `assets/bg_reference.jpg`
+and `assets/avatar.png` are attached to every AI image-generation call, hook
+and body slides alike, and `BODY_SLIDE_PROMPT_TEMPLATE` explicitly calls for
+the avatar to appear as a visual teacher/presenter on each of the 7 body
+slides, with a pose/placement that varies slide to slide and is never
+repeated. The script/content-generation step (step 2 above) still doesn't
+write the mascot into the slide's textual content - that's a separate,
+text-only concern - but visually, the avatar now shows up everywhere.
+The *procedural* PIL fallback (`SLIDE_IMAGE_MODE=procedural` only) is the
+one place that's still hook-only: a fixed procedural layout can't reproduce
+the AI prompts' per-slide creative variation, so its 6 middle body slides
+use a full-width text/code/highlight layout with a small role icon instead
+of the mascot - see below for exactly what it draws.
 
 ### Cover layout rotation
 
@@ -211,12 +253,15 @@ given, since that's filled in from the same `variant`) and the procedural PIL
 fallback (which mirrors the avatar + speech bubble left or right). To add
 more variety, add entries to `COVER_VARIANTS`.
 
-### Thumbnail: a user-authored, ever-changing prompt
+### Thumbnail and body slides: two user-authored, verbatim prompts
 
-The hook/thumbnail slide's AI image is built from `THUMBNAIL_PROMPT_TEMPLATE`
-in `scripts/generate.py` - a long, detailed prompt supplied verbatim (only
-its bracketed placeholders like `[INSERT TOPIC HERE]` are filled in per day,
-via `build_thumbnail_prompt()`). Its core instruction is that **every
+Every AI-generated slide image comes from one of two long, detailed,
+user-authored prompts in `scripts/generate.py`, each used **verbatim** -
+only their bracketed placeholders are filled in per slide, and the wording
+around those placeholders is never touched by the code.
+
+**Hook/thumbnail slide (`THUMBNAIL_PROMPT_TEMPLATE`, filled in by
+`build_thumbnail_prompt()`).** Its core instruction is that **every
 thumbnail must look meaningfully different** from the last one: a different
 creative direction (cinematic, investigation, before/after, futuristic UI,
 comic/reaction, 3D, breaking-news, minimal editorial, visual metaphor,
@@ -228,6 +273,19 @@ headline, subtitle, avatar speech) are derived from the new flat schema's
 `title`/`content`/`highlight` fields on the hook slide (see
 `build_thumbnail_prompt()` for the exact mapping), since the old
 `kicker`/`alert`/`subtitle`/`avatar_line` fields no longer exist.
+
+**Body slides 2-8 (`BODY_SLIDE_PROMPT_TEMPLATE`, filled in by
+`build_body_slide_prompt()`).** A separate, ~400-line prompt for the 7
+non-hook slides, picking one visual composition per slide (code + callouts,
+before/after, flow diagram, comparison, decision tree, etc, chosen to fit
+that slide's content) and calling for the avatar to appear on every one of
+them too, as a visual teacher/presenter whose pose and placement vary slide
+to slide and never repeat. `build_body_slide_prompt()` maps the flat
+schema's fields onto this template's placeholders: carousel topic, slide
+number ("N of 8"), the slide's purpose (from `visual_story`, falling back to
+a label derived from `type`), `title`, `content`, `code` (or `(none)`),
+`highlight`/`infographic` as callouts, and a short avatar line derived from
+`highlight` or the first sentence of `content`.
 
 ### Caption: guaranteed bullet points
 
@@ -243,6 +301,29 @@ bulleted, regardless of what shape Gemini's response came back in. `dry_run.py`
 includes a test that feeds a deliberately messy single-paragraph string
 through this and prints the result, so you can verify it before trusting it
 in production.
+
+### SEO keywords & hashtags: explicit prompt guidance, required not optional
+
+`CAROUSEL_PROMPT_TEMPLATE`'s "CAPTION, SEO & HASHTAGS" section spells out
+exactly what makes a good `seo_keywords`/`hashtags` response instead of
+leaving Gemini to guess from the bare JSON schema:
+
+- **`seo_keywords`** (3-5 entries): real search-phrase quality, not generic
+  filler - at least 1-2 should be specific to that day's exact mechanism/bug
+  (e.g. "v8 hidden classes explained"), not just broad terms every post could
+  reuse.
+- **`hashtags`** (10-15 entries): a deliberate 3-tier mix each time - 3-4
+  broad/high-volume tags for reach, 5-7 tags niche to that day's specific
+  technology/topic (not a fixed list reused daily), 1-2 community/branded
+  tags.
+
+`build_carousel()` now **requires** both to be non-empty and raises if
+Gemini returns either as an empty array - previously they were silently
+defaulted to `[]`, so a run could succeed with zero hashtags/keywords and
+nobody would notice. `build_captions()` renders `seo_keywords` as a bracketed
+`[kw1, kw2, ...]` line and joins `hashtags` (capped at 15 for Instagram, 5 for
+Telegram) - both appear after the bullet body, separated by a forced blank
+line (see the `⠀` Braille-blank trick below).
 
 ### Mascot poses (generated once, then cached)
 
@@ -279,26 +360,23 @@ possible edit, which helps a lot but cannot fully guarantee consistency. If
 you swap in a different mascot, update that description too - or override it
 with an `AVATAR_DESCRIPTION` secret.
 
-### AI background generation (best-effort)
+### AI background generation
 
 Each run asks a Gemini **image-generation** model (`generate_daily_background()`
 in `scripts/generate.py`) to create today's base background texture, using
-`assets/bg_reference.jpg` as a style reference. This is genuinely
-best-effort:
+`assets/bg_reference.jpg` as a style reference.
 
-- It tries several candidate model names in order (`gemini-2.5-flash-image`,
-  `gemini-3-pro-image`, and a couple of older preview names), the same
-  fallback pattern used for the text-generation models.
-- Not every Google account/API key has access to an image-generation model
-  yet (this is a newer, still-rolling-out capability, similar to how Search
-  grounding turned out to need a paid tier). If none of the candidates work,
-  the script **automatically falls back** to the original procedural
-  gradient + hand-drawn circuit pattern - posting still succeeds, it just
-  uses the procedural background instead of an AI one that day.
-- Check the Action run's logs for lines starting with `AI background:` to
-  see whether it succeeded (`generated successfully with '<model>'`) or
-  fell back (`all candidate models failed, using procedural gradient
-  instead`).
+- It tries the candidate model names in `IMAGE_MODEL_CANDIDATES` in order
+  (`gemini-2.5-flash-image`, `gemini-3-pro-image`), the same fallback
+  pattern used for the text-generation models.
+- **In `SLIDE_IMAGE_MODE=ai` (the default), if every candidate fails, the run
+  now fails loudly** instead of silently using the procedural gradient - see
+  "Slide rendering: AI-generated slides, no silent fallback" above for why,
+  and for how to read the `AI background: model '<model>' failed with
+  <code>: ...` lines to find the actual cause (quota/billing is the most
+  common one). In `SLIDE_IMAGE_MODE=procedural`, a failure here still falls
+  back to the procedural gradient quietly, since that mode was already opted
+  out of AI generation.
 - You can pin a specific image model with an optional `IMAGE_MODEL` repo
   secret (same idea as `GEMINI_MODEL`). Run the **"Check setup"** workflow
   (see below) to see which image-generation models, if any, your API key
