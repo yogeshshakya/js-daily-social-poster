@@ -101,6 +101,40 @@ for _fallback in [
     if _fallback not in IMAGE_MODEL_CANDIDATES:
         IMAGE_MODEL_CANDIDATES.append(_fallback)
 
+# Minimum gap (seconds) enforced between any two outgoing image-generation
+# requests (background + all 8 slides, across all candidate models). A run
+# makes up to ~9 separate image calls back-to-back with zero spacing by
+# default, which can trip a per-minute rate limit even when the per-day
+# quota is fine. This adds a simple artificial delay/queue: before each
+# request, wait until at least IMAGE_REQUEST_MIN_GAP_SECONDS have passed
+# since the previous one. Override with the IMAGE_REQUEST_MIN_GAP_SECONDS
+# env var / repo secret; set to 0 to disable.
+IMAGE_REQUEST_MIN_GAP_SECONDS = float(
+    os.environ.get("IMAGE_REQUEST_MIN_GAP_SECONDS", "8")
+)
+_last_image_request_at = None  # monotonic timestamp of the last image call
+
+
+def _throttle_image_request():
+    """Sleeps just long enough to keep consecutive image-generation requests
+    at least IMAGE_REQUEST_MIN_GAP_SECONDS apart. No-op for the first call."""
+    global _last_image_request_at
+    if IMAGE_REQUEST_MIN_GAP_SECONDS <= 0:
+        _last_image_request_at = time.monotonic()
+        return
+    now = time.monotonic()
+    if _last_image_request_at is not None:
+        elapsed = now - _last_image_request_at
+        remaining = IMAGE_REQUEST_MIN_GAP_SECONDS - elapsed
+        if remaining > 0:
+            print(
+                f"Image request throttle: waiting {remaining:.1f}s before the "
+                f"next image-generation call.",
+                file=sys.stderr,
+            )
+            time.sleep(remaining)
+    _last_image_request_at = time.monotonic()
+
 # ---------------------------------------------------------------------------
 # Theme: deep blue gradient + circuit pattern, matching the brand reference
 # ---------------------------------------------------------------------------
@@ -211,6 +245,7 @@ def _call_image_model(parts, label):
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{model}:generateContent?key={GEMINI_API_KEY}"
         )
+        _throttle_image_request()
         try:
             resp = requests.post(url, json=payload, timeout=120)
         except requests.RequestException as e:
