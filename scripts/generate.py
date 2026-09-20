@@ -78,10 +78,18 @@ os.makedirs(BUILD_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(HISTORY_PATH), exist_ok=True)
 
 # Image-generation model candidates, tried in order (same pattern as the text
-# MODEL_CANDIDATES above). AI background generation is best-effort: if every
-# candidate fails (no billing enabled, model unavailable, quota, network),
-# generate_daily_background() falls back to the procedural gradient so a
-# single day's post is never blocked by this.
+# MODEL_CANDIDATES above). SLIDE_IMAGE_MODE=ai (the default) requires this to
+# actually succeed - see generate_daily_background() / render_slide(), which
+# now raise instead of silently falling back to the procedural renderer when
+# every candidate here fails (quota, billing, a dead/renamed model, etc).
+#
+# NOTE: "gemini-2.5-flash-image-preview" and
+# "gemini-2.0-flash-preview-image-generation" were removed from this list -
+# both returned a permanent 404 "not found for API version v1beta" in
+# production, i.e. they no longer exist / were renamed, not a transient
+# issue. If you hit 404s on the remaining candidates too, check
+# https://ai.google.dev/gemini-api/docs/models for the current image-model
+# names and update this list (or set the IMAGE_MODEL repo secret to pin one).
 _env_image_model = os.environ.get("IMAGE_MODEL")
 IMAGE_MODEL_CANDIDATES = []
 if _env_image_model:
@@ -89,8 +97,6 @@ if _env_image_model:
 for _fallback in [
     "gemini-2.5-flash-image",
     "gemini-3-pro-image",
-    "gemini-2.5-flash-image-preview",
-    "gemini-2.0-flash-preview-image-generation",
 ]:
     if _fallback not in IMAGE_MODEL_CANDIDATES:
         IMAGE_MODEL_CANDIDATES.append(_fallback)
@@ -253,11 +259,23 @@ def _contain_fit(img):
 
 
 def generate_daily_background():
-    """Best-effort: ask a Gemini image-generation model for a background
-    texture in the style of assets/bg_reference.jpg. Returns a PIL Image
-    sized (W, H), or None if generation isn't available/fails - callers
-    must handle None by falling back to the procedural gradient."""
+    """Ask a Gemini image-generation model for a background texture in the
+    style of assets/bg_reference.jpg. Returns a PIL Image sized (W, H).
+
+    When SLIDE_IMAGE_MODE=ai (the default), this raises instead of silently
+    falling back to the procedural gradient - a failure here means the image
+    model isn't actually working for this account/run (quota, billing, a dead
+    model name), and that should stop the run loudly rather than produce a
+    post that looks nothing like what was asked for. Set
+    SLIDE_IMAGE_MODE=procedural if you want the procedural gradient on
+    purpose; in that mode this still returns None on failure as before."""
     if not os.path.exists(BG_REFERENCE_PATH):
+        if SLIDE_IMAGE_MODE == "ai":
+            raise RuntimeError(
+                f"AI background: {BG_REFERENCE_PATH} is missing, so there is "
+                f"no style reference to generate from. Add that file, or set "
+                f"SLIDE_IMAGE_MODE=procedural to use the procedural gradient."
+            )
         return None
 
     mime, b64 = _encode_image_b64(BG_REFERENCE_PATH)
@@ -277,6 +295,16 @@ def generate_daily_background():
 
     img = _call_image_model(parts, "AI background")
     if img is None:
+        if SLIDE_IMAGE_MODE == "ai":
+            raise RuntimeError(
+                f"AI background: image generation failed for every candidate "
+                f"model ({IMAGE_MODEL_CANDIDATES}). See the 'AI background: "
+                f"model ... failed with ...' lines above for the exact reason "
+                f"(quota/429, billing, a model name that no longer exists/404, "
+                f"etc). Not falling back to the procedural gradient - fix the "
+                f"underlying cause and re-run, or set SLIDE_IMAGE_MODE=procedural "
+                f"if you want the procedural gradient on purpose."
+            )
         print("AI background: using procedural gradient instead.", file=sys.stderr)
         return None
 
@@ -977,47 +1005,641 @@ def build_thumbnail_prompt(slide, topic):
     )
 
 
+# User-authored prompt template for the 7 BODY slides (everything except the
+# hook/thumbnail slide, which uses THUMBNAIL_PROMPT_TEMPLATE above). Used
+# verbatim - only the bracketed placeholders in section 9 ("SLIDE CONTENT")
+# are filled in per slide; the wording elsewhere is unchanged. Unlike the
+# thumbnail template, this one calls for the avatar on every body slide too
+# (section 3 "AVATAR CHARACTER" / section 11 "AVATAR VARIATION"), so
+# generate_slide_image_ai() now attaches assets/avatar.png for these slides
+# as well, not just the hook slide.
+BODY_SLIDE_PROMPT_TEMPLATE = """Create ONE finished Instagram carousel slide, portrait 4:5 (1080x1350), for a premium JavaScript / React / Next.js developer-education Instagram account.
+
+This is ONE SLIDE from a multi-slide educational carousel.
+
+The slide must visually explain the provided JavaScript concept in a way that is:
+- easy to understand
+- technically accurate
+- visually engaging
+- premium
+- modern
+- developer-focused
+- suitable for Instagram
+
+The final image should look like a professionally designed technology education slide, NOT like a generic Canva template.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. BRAND VISUAL IDENTITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Use the attached background image ONLY as a brand-style reference.
+
+Maintain the same overall brand language:
+
+- deep navy / dark blue background
+- futuristic developer atmosphere
+- subtle digital / circuit-board texture
+- cyan and electric-blue accents
+- premium dark technology aesthetic
+- white typography
+- high contrast
+- clean modern UI
+- subtle glow and depth
+
+IMPORTANT:
+
+Do NOT copy the exact background composition.
+
+Create a fresh background treatment for this slide while keeping the same overall visual identity.
+
+Change when appropriate:
+- circuit pattern
+- glow position
+- lighting
+- digital elements
+- perspective
+- background depth
+- technical atmosphere
+
+Every slide should feel like it belongs to the SAME carousel, but should NOT look identical to the previous slide.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. SLIDE-SPECIFIC CREATIVE DIRECTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Do NOT use the same layout for every slide.
+
+Choose the visual composition based on the content of THIS slide.
+
+Possible visual approaches:
+
+A. CODE + EXPLANATION
+Show a clean JavaScript code block with the important line visually highlighted and explain it using arrows/callouts.
+
+B. BEFORE → AFTER
+Show the state before and after the JavaScript operation.
+
+C. PROBLEM → SOLUTION
+Show the incorrect approach followed by the correct approach.
+
+D. FLOW DIAGRAM
+Represent the JavaScript execution flow visually using arrows and connected nodes.
+
+E. VISUAL METAPHOR
+Explain the programming concept through an intuitive visual metaphor.
+
+F. DEBUGGING
+Show the avatar investigating a problem, with code and an error/result nearby.
+
+G. SYSTEM DIAGRAM
+Show how JavaScript internally behaves using simplified technical diagrams.
+
+H. COMPARISON
+Compare two approaches side by side.
+
+I. TIMELINE / EXECUTION
+Show what happens step-by-step over time.
+
+J. MAGNIFIED DETAIL
+Show a small part of the code enlarged to explain an important detail.
+
+K. INTERACTIVE UI
+Show the avatar interacting with a browser, console, code editor or futuristic developer interface.
+
+L. CONCEPTUAL ILLUSTRATION
+Use a strong visual representation of the programming concept with minimal UI.
+
+Choose ONE primary approach that best explains THIS slide.
+
+Do not combine too many visual concepts.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. AVATAR CHARACTER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The second attached image contains the mascot/avatar.
+
+Use the EXACT SAME CHARACTER DESIGN.
+
+Preserve:
+- face
+- hairstyle
+- clothes
+- colors
+- proportions
+- character identity
+- recognizable features
+- overall illustration style
+
+Remove the original background cleanly.
+
+IMPORTANT:
+
+The avatar is NOT a decorative sticker.
+
+Use the avatar as a visual teacher/presenter.
+
+The avatar should actively participate in explaining the concept.
+
+Possible actions:
+
+- pointing toward code
+- explaining a highlighted line
+- looking at a diagram
+- holding a JavaScript object
+- examining a bug
+- interacting with a UI
+- pointing toward an arrow
+- comparing two code blocks
+- looking surprised at an unexpected result
+- showing a correct solution
+- holding a warning sign
+- using a magnifying glass
+- standing beside a visual diagram
+- interacting with a browser/console
+- sitting on a code panel
+- emerging from behind a UI panel
+- visually demonstrating the concept
+
+Choose the pose and expression based on the slide's content.
+
+DO NOT automatically place the avatar on the same side on every slide.
+
+The avatar may appear:
+- left
+- right
+- center
+- foreground
+- background
+- partially cropped
+- integrated with the diagram
+- interacting with code
+- overlapping a UI element
+
+The avatar should look like they are teaching the viewer.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. VISUAL STORYTELLING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Do not simply place text and code on a background.
+
+Convert the concept into a visual story.
+
+Identify the most important idea in this slide and make that idea the visual focal point.
+
+For example:
+
+CODE
+↓
+JAVASCRIPT ENGINE
+↓
+BEHAVIOUR
+↓
+RESULT
+
+or:
+
+BEFORE
+↓
+ACTION
+↓
+AFTER
+
+or:
+
+PROBLEM
+↓
+WHY IT HAPPENS
+↓
+SOLUTION
+
+Use arrows, diagrams, highlights and visual relationships where useful.
+
+The viewer should understand the concept visually even before reading every word.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. JAVASCRIPT CODE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If code is provided, reproduce it EXACTLY.
+
+Do not:
+- modify code
+- fix code
+- simplify code
+- add code
+- remove code
+- change variable names
+- change punctuation
+- change capitalization
+- invent missing code
+
+Code must be character-for-character identical to the provided script.
+
+Display code in a clean developer-style code editor.
+
+Use monospace typography.
+
+Highlight only the important part of the code using subtle:
+- cyan
+- blue
+- green
+- orange
+- red
+
+Do not highlight everything.
+
+Use arrows or callouts to connect the code with the explanation.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. TECHNICAL ACCURACY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The visual explanation must accurately represent the JavaScript concept.
+
+Do not use technically misleading diagrams.
+
+For concepts involving:
+
+- JavaScript engine
+- V8
+- event loop
+- call stack
+- heap
+- closures
+- promises
+- async/await
+- React rendering
+- browser APIs
+- performance
+- memory
+- objects
+- prototypes
+- scope
+- execution context
+
+use simplified educational diagrams where necessary.
+
+The diagrams may be simplified, but they must not communicate incorrect technical behaviour.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. TYPOGRAPHY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Use premium modern developer typography.
+
+Typography hierarchy:
+
+SLIDE LABEL
+→ small
+
+SLIDE TITLE
+→ large and bold
+
+EXPLANATION
+→ medium and highly readable
+
+CODE
+→ monospace
+
+CALLOUTS
+→ concise and visually connected to the relevant element
+
+Use white as the primary text colour.
+
+Use cyan/blue for important technical concepts.
+
+Use green for:
+- correct
+- success
+- optimized
+- positive result
+
+Use orange for:
+- warning
+- important transition
+
+Use red for:
+- error
+- bad approach
+- performance problem
+
+Do not make every word colourful.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. TEXT ACCURACY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Render ALL provided text EXACTLY as written.
+
+Do NOT:
+- paraphrase
+- translate
+- rewrite
+- shorten
+- add words
+- remove words
+- change punctuation
+- change capitalization
+- invent additional content
+- add lorem ipsum
+
+If text is too long for the composition, redesign the layout.
+
+NEVER alter the provided educational content just to make it fit.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. SLIDE CONTENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CAROUSEL TOPIC:
+"[INSERT COMPLETE CAROUSEL TOPIC]"
+
+SLIDE NUMBER:
+"[INSERT SLIDE NUMBER]"
+
+SLIDE PURPOSE:
+"[INSERT WHAT THIS SLIDE IS EXPLAINING]"
+
+SLIDE TITLE:
+"[INSERT EXACT SLIDE TITLE]"
+
+EXPLANATION:
+"[INSERT EXACT EXPLANATION]"
+
+CODE:
+"[INSERT EXACT CODE IF ANY]"
+
+CALLOUTS / LABELS:
+"[INSERT EXACT CALLOUTS IF ANY]"
+
+AVATAR DIALOGUE:
+"[INSERT AVATAR DIALOGUE IF ANY]"
+
+BOTTOM HANDLE:
+"@modernjavascripthub"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. LAYOUT VARIATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Do NOT use the same composition for every carousel slide.
+
+Examples of different slide compositions:
+
+SLIDE 1:
+Strong editorial introduction.
+
+SLIDE 2:
+Large concept visualization + avatar explanation.
+
+SLIDE 3:
+Large code block + highlighted section.
+
+SLIDE 4:
+Step-by-step flow diagram.
+
+SLIDE 5:
+Before vs After comparison.
+
+SLIDE 6:
+Internal JavaScript/V8 visualization.
+
+SLIDE 7:
+Common mistake vs correct approach.
+
+SLIDE 8:
+Summary / key takeaway.
+
+These are examples only.
+
+Choose the layout based on the actual content.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. AVATAR VARIATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Never repeat the exact same avatar pose across slides.
+
+Vary:
+- pose
+- direction of gaze
+- hand gesture
+- expression
+- scale
+- camera angle
+- position
+- interaction with UI
+- interaction with code
+
+Examples:
+
+Slide explaining a mistake:
+→ avatar looks concerned or surprised.
+
+Slide explaining a solution:
+→ avatar looks confident and points toward the correct solution.
+
+Slide explaining internal behaviour:
+→ avatar investigates a technical diagram.
+
+Slide showing comparison:
+→ avatar stands between two approaches.
+
+Slide showing code:
+→ avatar points toward the important line.
+
+Slide showing a surprising result:
+→ avatar reacts to the result.
+
+The avatar should have a clear PURPOSE on every slide.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12. VISUAL HIERARCHY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Every slide must have ONE primary visual focal point.
+
+Prioritize:
+
+1. Main concept
+2. Slide title
+3. Code / diagram
+4. Avatar
+5. Supporting explanation
+6. Decorative elements
+
+Do not let decorative elements compete with the educational content.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+13. SPACING AND READABILITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Use generous spacing.
+
+Maintain safe margins around all edges.
+
+Nothing important should touch or cross the edges.
+
+Avoid:
+- cramped content
+- tiny text
+- overlapping text
+- unreadable code
+- excessive UI panels
+- excessive decoration
+- clutter
+- unnecessary icons
+
+The image must remain readable when viewed on a phone.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+14. DEPTH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create visual depth using:
+
+FOREGROUND:
+avatar / primary object
+
+MIDGROUND:
+code / diagrams / UI
+
+BACKGROUND:
+subtle circuits / digital environment / lighting
+
+Use shadows, glow and perspective carefully.
+
+The design should feel dimensional but remain clean.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+15. CAROUSEL CONSISTENCY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Although each slide should have a different composition, ALL slides belong to the same carousel.
+
+Maintain consistency through:
+
+- same avatar character
+- same overall colour palette
+- same typography family/style
+- same dark technology atmosphere
+- same visual quality
+- same brand handle
+- same general design language
+
+But vary:
+- composition
+- visual metaphor
+- avatar pose
+- infographic style
+- background arrangement
+- camera angle
+- focal point
+
+The result should feel like:
+
+"Different pages of the SAME premium technical magazine."
+
+NOT:
+
+"Eight copies of the same template."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+16. FINAL RESTRICTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Do NOT add:
+- extra logos
+- watermarks
+- URLs
+- fake social handles
+- unrelated captions
+- random code
+- lorem ipsum
+- additional headlines
+- unrelated icons
+- unrelated characters
+
+Do not change the avatar's identity or clothing.
+
+Do not copy the exact layout of the reference image.
+
+Do not make the avatar stand passively beside the content.
+
+Do not make this look like a generic reusable template."""
+
+
+def build_body_slide_prompt(slide, index, total, topic=None):
+    """Fills the user-authored BODY_SLIDE_PROMPT_TEMPLATE with today's actual
+    content. Only the bracketed placeholders in section 9 are substituted -
+    the wording around them is used exactly as given.
+
+    Maps the new flat schema onto this template's fields:
+      - carousel topic  <- topic (the day's overall topic)
+      - slide number    <- "N of TOTAL"
+      - slide purpose    <- slide["visual_story"] (this is exactly "what
+                            this slide is explaining/showing" in the new
+                            schema), falling back to a human label derived
+                            from slide["type"] (SLIDE_TYPE_LABEL) if absent
+      - slide title      <- slide["title"]
+      - explanation      <- slide["content"]
+      - code              <- slide["code"] (verbatim, or "(none)" if empty)
+      - callouts/labels  <- slide["highlight"] (or the infographic guidance
+                            if no highlight was given)
+      - avatar dialogue  <- slide["highlight"] if it reads like a short
+                            spoken line, else a short line derived from
+                            slide["content"]'s first sentence
+    """
+    kind = slide.get("type", "simple_explanation")
+    purpose = slide.get("visual_story") or SLIDE_TYPE_LABEL.get(kind, kind.replace("_", " ").title())
+    content = slide.get("content", "")
+    content_sentences = _split_sentences(content)
+    avatar_dialogue = slide.get("highlight") or (
+        content_sentences[0] if content_sentences else content
+    )
+    callouts = slide.get("highlight") or slide.get("infographic") or ""
+
+    return (
+        BODY_SLIDE_PROMPT_TEMPLATE
+        .replace("[INSERT COMPLETE CAROUSEL TOPIC]", topic or "")
+        .replace("[INSERT SLIDE NUMBER]", f"{index} of {total}")
+        .replace("[INSERT WHAT THIS SLIDE IS EXPLAINING]", purpose)
+        .replace("[INSERT EXACT SLIDE TITLE]", slide.get("title", ""))
+        .replace("[INSERT EXACT EXPLANATION]", content)
+        .replace("[INSERT EXACT CODE IF ANY]", slide.get("code", "") or "(none)")
+        .replace("[INSERT EXACT CALLOUTS IF ANY]", callouts or "(none)")
+        .replace("[INSERT AVATAR DIALOGUE IF ANY]", avatar_dialogue or "(none)")
+    )
+
+
 def generate_slide_image_ai(slide, index, total, variant=None, topic=None):
     """Best-effort: have the image model lay out the entire slide. Returns a
     PIL Image sized (W, H), or None so the caller falls back to PIL."""
     if not os.path.exists(BG_REFERENCE_PATH):
         return None
 
-    is_title = slide.get("type", "simple_explanation") == "hook"
+    is_hook = slide.get("type", "simple_explanation") == "hook"
 
-    if is_title:
-        # The cover/thumbnail uses the user-authored prompt verbatim (see
-        # THUMBNAIL_PROMPT_TEMPLATE above), not the generic wrapper below.
+    if is_hook:
+        # The cover/thumbnail uses its own user-authored prompt verbatim
+        # (THUMBNAIL_PROMPT_TEMPLATE above).
         prompt = build_thumbnail_prompt(slide, topic)
     else:
-        spec = _slide_spec_text(slide, index, total, variant=variant, topic=topic)
-        prompt = (
-            "Create a single finished Instagram carousel slide, portrait 4:5 "
-            "(1080x1350), for a developer-education account.\n\n"
-            "BACKGROUND: use the attached reference image's background exactly - "
-            "the same deep navy/blue tone with the same subtle glowing circuit-"
-            "board pattern. Keep it dark and low-contrast so text on top is easy "
-            "to read.\n\n"
-            "STYLE: explain the content visually, with infographics - rounded "
-            "bordered panels, clear icons, arrows showing flow between steps, "
-            "monospace-looking code blocks, checkmarks for outputs. Bright cyan/"
-            "blue accents, white body text, green for correct results, orange/red "
-            "for errors. Clean, modern, high contrast, generous spacing, nothing "
-            "cramped or clipped at the edges.\n\n"
-            "TEXT: render every line of the text below exactly as written, with "
-            "correct spelling - do not paraphrase, translate, invent extra text, or "
-            "add lorem ipsum. Any code must be character-for-character identical to "
-            "what is given.\n\n"
-            f"{spec}\n"
-            "Do not add any other logos, watermarks, URLs or captions."
-        )
+        # The 7 body slides use their own user-authored prompt verbatim
+        # (BODY_SLIDE_PROMPT_TEMPLATE above) - this also calls for the
+        # avatar to appear (varying pose/placement) on every body slide.
+        prompt = build_body_slide_prompt(slide, index, total, topic=topic)
 
     bg_mime, bg_b64 = _encode_image_b64(BG_REFERENCE_PATH)
     parts = [
         {"text": prompt},
         {"inlineData": {"mimeType": bg_mime, "data": bg_b64}},
     ]
-    if is_title and os.path.exists(AVATAR_PATH):
+    if os.path.exists(AVATAR_PATH):
+        # Both templates' "second attached image" is the avatar - true for
+        # the hook slide and, now, every body slide too.
         av_mime, av_b64 = _encode_image_b64(AVATAR_PATH)
         parts.append({"inlineData": {"mimeType": av_mime, "data": av_b64}})
 
@@ -1322,31 +1944,6 @@ def draw_chrome(draw, slide_index, total, kicker=None):
 # ---------------------------------------------------------------------------
 # Title / thumbnail slide (uses the mascot avatar)
 # ---------------------------------------------------------------------------
-def draw_speech_bubble(draw, cx, bottom_y, text, font, max_width=560, fill=None, text_fill=None):
-    """Rounded speech bubble with a downward tail, bottom-anchored at (cx, bottom_y)."""
-    fill = fill or WHITE
-    text_fill = text_fill or (10, 20, 46)
-    pad_x, pad_y, line_h = 26, 20, 34
-    lines = wrap_text(draw, text, font, max_width - 2 * pad_x)[:3]
-    text_w = max((draw.textlength(l, font=font) for l in lines), default=0)
-    box_w = text_w + 2 * pad_x
-    box_h = len(lines) * line_h + 2 * pad_y
-    tail = 18
-    top = bottom_y - box_h - tail
-    left = cx - box_w / 2
-    draw.rounded_rectangle([left, top, left + box_w, top + box_h], radius=20, fill=fill)
-    draw.polygon(
-        [(cx - tail, top + box_h), (cx + tail, top + box_h), (cx, top + box_h + tail)],
-        fill=fill,
-    )
-    ty = top + pad_y
-    for line in lines:
-        tw = draw.textlength(line, font=font)
-        draw.text((cx - tw / 2, ty), line, font=font, fill=text_fill)
-        ty += line_h
-    return top  # top edge, in case caller wants to reserve space above it
-
-
 def draw_side_speech_bubble(draw, anchor_x, cy, text, font, box_w=430, max_lines=6, side="right"):
     """Speech bubble sitting beside the mascot, tail pointing at his face - reads
     as him actually talking to the viewer, rather than a caption floating over
@@ -1579,21 +2176,53 @@ TYPE_ROLE = {
 }
 
 
-def _fit_paragraph(draw, text, max_width, max_height, start_size=34, min_size=22):
-    """Pick the largest font size (within range) whose wrapped text fits
-    max_height, returning (font, lines)."""
+def _fit_paragraph(draw, text, max_width, max_height, start_size=34, min_size=22, max_size=56):
+    """Pick the font size (within [min_size, max_size]) whose wrapped text
+    best fills max_height, returning (font, lines, line_h).
+
+    Searches DOWN from start_size first (the old behavior, for overflow), but
+    if the text fits comfortably with room to spare, it then searches UP past
+    start_size toward max_size so short body text on a mostly-empty slide
+    grows to actually fill its reserved space instead of leaving a gap."""
     text = text or ""
+    if not text:
+        font = load_font("DejaVuSans.ttf", start_size)
+        return font, [], start_size * 1.45
+
+    # 1. Shrink from start_size down to min_size until it fits (overflow case).
+    fit_size = None
     for size in range(start_size, min_size - 1, -2):
         font = load_font("DejaVuSans.ttf", size)
         lines = wrap_text(draw, text, font, max_width)
         line_h = size * 1.45
         if len(lines) * line_h <= max_height:
-            return font, lines, line_h
-    font = load_font("DejaVuSans.ttf", min_size)
+            fit_size = size
+            break
+
+    if fit_size is None:
+        font = load_font("DejaVuSans.ttf", min_size)
+        lines = wrap_text(draw, text, font, max_width)
+        line_h = min_size * 1.45
+        max_lines = max(1, int(max_height // line_h))
+        return font, lines[:max_lines], line_h
+
+    # 2. Grow past start_size toward max_size while it still fits, so sparse
+    # content (a slide with just a heading + one short sentence) doesn't
+    # leave the rest of the slide empty.
+    best_size = fit_size
+    for size in range(start_size + 2, max_size + 1, 2):
+        font = load_font("DejaVuSans.ttf", size)
+        lines = wrap_text(draw, text, font, max_width)
+        line_h = size * 1.45
+        if len(lines) * line_h <= max_height:
+            best_size = size
+        else:
+            break
+
+    font = load_font("DejaVuSans.ttf", best_size)
     lines = wrap_text(draw, text, font, max_width)
-    line_h = min_size * 1.45
-    max_lines = max(1, int(max_height // line_h))
-    return font, lines[:max_lines], line_h
+    line_h = best_size * 1.45
+    return font, lines, line_h
 
 
 def _fit_code_lines(raw_code, max_chars=34):
@@ -1662,11 +2291,56 @@ def draw_highlight_chip(draw, x, y, w, text):
     return box_h
 
 
+def draw_visual_story_card(draw, x, y, w, text):
+    """Fallback infographic for slide types that expect a visual (flow,
+    under_the_hood, etc) but have no code and no highlight to show instead:
+    renders the script's own visual_story/infographic guidance as short
+    connected step chips, so the slide isn't just a paragraph of text even
+    though the procedural renderer can't draw the AI-generated diagram
+    itself. Splits on arrows/newlines/sentence breaks first; falls back to
+    a single card with the wrapped text if it doesn't split cleanly."""
+    steps = [s.strip(" -") for s in re.split(r"->|→|\n|(?<=[.!?])\s+", text) if s.strip(" -")]
+    steps = steps[:4] or [text]
+
+    chip_font = load_font("DejaVuSans-Bold.ttf", 24)
+    line_h = 30
+    pad_y = 18
+    gap = 16
+    total_h = 0
+    chip_heights = []
+    for step in steps:
+        lines = wrap_text(draw, step, chip_font, w - 80)[:2]
+        h = len(lines) * line_h + 2 * pad_y
+        chip_heights.append((h, lines))
+        total_h += h
+    total_h += gap * (len(steps) - 1)
+
+    cy = y
+    for i, (h, lines) in enumerate(chip_heights):
+        last = i == len(chip_heights) - 1
+        tone = CHECK_GREEN if last else ACCENT
+        draw.rounded_rectangle([x, cy, x + w, cy + h], radius=16,
+                               fill=blend(PANEL_BG, tone, 0.14), outline=tone, width=2)
+        ty = cy + (h - len(lines) * line_h) / 2
+        for line in lines:
+            draw.text((x + 34, ty), line, font=chip_font, fill=WHITE)
+            ty += line_h
+        cy += h
+        if not last:
+            draw_down_arrow(draw, x + w / 2, cy + 2, cy + gap - 2, color=ACCENT)
+            cy += gap
+    return total_h
+
+
 def render_content_slide(slide, index, total, out_path):
     """Procedural fallback for a body slide under the new flat schema
     (simple_explanation / code_example / flow / under_the_hood /
-    common_mistake / better_approach). Layout: heading, body paragraph,
-    optional code block, optional highlighted takeaway line - no panel grid."""
+    common_mistake / better_approach). Layout: heading, then body/code/
+    highlight/visual-story blocks - whichever the slide actually has -
+    vertically CENTERED as a group in the remaining space, with the body
+    paragraph's font size growing to fill the slot when content is short.
+    This avoids the old behavior where sparse content left a large dead gap
+    between the body text and the bottom banner."""
     img = make_background(seed=f"{TODAY}-{index}")
     draw = ImageDraw.Draw(img)
     kind = slide.get("type", "simple_explanation")
@@ -1684,33 +2358,80 @@ def render_content_slide(slide, index, total, out_path):
 
     content_w = W - 2 * margin
     bottom_limit = H - 150  # leave room for the series banner + footer
+    available_h = max(80, bottom_limit - y)
+
     code_lines = _fit_code_lines(slide.get("code", ""))
     highlight = slide.get("highlight", "")
+    # Only draw the visual-story fallback chips when there's no code to show -
+    # code is already a strong visual, and showing both tends to overcrowd.
+    # Skip the visual-story fallback chips when there's already a code block
+    # OR a highlight chip - both are already a visual anchor, and stacking a
+    # third near-duplicate block on top tends to repeat the same point.
+    visual_text = (
+        ""
+        if (code_lines or highlight)
+        else (slide.get("visual_story") or slide.get("infographic") or "")
+    )
 
-    # Reserve space for the code block and highlight chip (if present) first,
-    # then give whatever remains to the body paragraph.
+    block_gap = 26
+
+    # Reserve fixed-height blocks first (code / highlight / visual chips),
+    # then give whatever remains to the body paragraph, which can also GROW
+    # its font size to use up any leftover space (see _fit_paragraph).
     reserved = 0
     if code_lines:
-        reserved += len(code_lines) * 34 + 40 + 24  # block height + gap
+        reserved += len(code_lines) * 34 + 40 + block_gap  # code_card height + gap
     if highlight:
-        reserved += 34 * 2 + 36 + 24  # up to 2 lines + padding + gap
+        reserved += 34 * 2 + 36 + block_gap  # up to 2 lines + padding + gap
+    if visual_text:
+        reserved += 260 + block_gap  # rough upper bound; real height computed below
 
-    body_max_h = max(80, bottom_limit - y - reserved)
+    body_max_h = max(80, available_h - reserved)
     body_font, body_lines, body_line_h = _fit_paragraph(
         draw, slide.get("content", ""), content_w, body_max_h
     )
+    body_h = len(body_lines) * body_line_h
+
+    # Compute the real total height of everything we're about to draw, so the
+    # whole group can be centered in the available space instead of always
+    # starting right under the heading and leaving the rest blank.
+    blocks_h = body_h
+    if code_lines:
+        blocks_h += block_gap + (len(code_lines) * 34 + 40)
+    if highlight:
+        # draw_highlight_chip wraps to <=2 lines; measure it for real.
+        hf = load_font("DejaVuSans-Bold.ttf", 26)
+        h_lines = wrap_text(draw, highlight, hf, content_w - 90)[:2]
+        blocks_h += block_gap + (len(h_lines) * 32 + 36)
+    if visual_text:
+        blocks_h += block_gap  # card height added after we know it (below)
+
+    # Center the whole group vertically in the available space. Any leftover
+    # room is split between a top offset and (when there's more than one
+    # block) extra breathing room between blocks, so a slide with just a
+    # heading + one short highlight doesn't end up with all the slack
+    # dumped at the bottom as one big empty void.
+    n_blocks = 1 + sum([bool(code_lines), bool(highlight), bool(visual_text)])
+    extra = max(0, available_h - blocks_h)
+    top_offset = extra * 0.35
+    extra_gap = (extra * 0.65 / max(1, n_blocks - 1)) if n_blocks > 1 else 0
+    y += top_offset
+
     for line in body_lines:
         draw.text((margin, y), line, font=body_font, fill=MUTED)
         y += body_line_h
-    y += 24
+    y += block_gap + extra_gap
 
     if code_lines:
         block_h = draw_code_card(draw, margin, y, content_w, code_lines)
-        y += block_h + 24
+        y += block_h + block_gap + extra_gap
 
     if highlight:
         chip_h = draw_highlight_chip(draw, margin, y, content_w, highlight)
-        y += chip_h + 24
+        y += chip_h + block_gap + extra_gap
+
+    if visual_text:
+        draw_visual_story_card(draw, margin, y, content_w, visual_text)
 
     draw_series_banner(draw, H - 126)
     img.save(out_path, "PNG")
@@ -1778,19 +2499,29 @@ def render_summary_slide(slide, index, total, out_path):
 
 
 def render_slide(slide, index, total, out_path, variant=None, topic=None):
-    # Preferred path: let the image model lay out the whole slide (background
-    # from the reference image + infographics + text). If that isn't available
-    # for this account, or fails for this slide, fall back to the procedural
-    # PIL renderer below, which always works.
+    # AI path: let the image model lay out the whole slide (background from
+    # the reference image + infographics + text). SLIDE_IMAGE_MODE=ai is the
+    # default and is meant to be the ONLY path used in production - if the
+    # image model fails, that is a real problem (quota, billing, a dead model
+    # name) that should stop the run loudly, not be silently papered over
+    # with the procedural renderer. Set SLIDE_IMAGE_MODE=procedural instead if
+    # you want the PIL renderer on purpose.
     if SLIDE_IMAGE_MODE == "ai":
         ai_img = generate_slide_image_ai(slide, index, total, variant=variant, topic=topic)
-        if ai_img is not None:
-            ai_img.save(out_path, "PNG")
-            return
-        print(
-            f"AI slide {index}/{total}: falling back to the procedural renderer.",
-            file=sys.stderr,
-        )
+        if ai_img is None:
+            raise RuntimeError(
+                f"AI slide {index}/{total}: image generation failed for every "
+                f"candidate model ({IMAGE_MODEL_CANDIDATES}). See the "
+                f"'AI slide {index}/{total}: model ... failed with ...' lines "
+                f"above for the exact reason (quota/429, billing, a model name "
+                f"that no longer exists/404, etc). Not falling back to the "
+                f"procedural renderer - fix the underlying cause (check your "
+                f"Google AI Studio quota/billing, or update IMAGE_MODEL_CANDIDATES "
+                f"if a model name is dead) and re-run. If you want the "
+                f"procedural renderer on purpose, set SLIDE_IMAGE_MODE=procedural."
+            )
+        ai_img.save(out_path, "PNG")
+        return
 
     kind = slide.get("type", "simple_explanation")
     if kind == "hook":
@@ -2662,6 +3393,69 @@ REMOVE unnecessary information.
 Do NOT shrink the text.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CAPTION, SEO & HASHTAGS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Alongside the 8 slides, produce the Instagram caption fields and the SEO/
+hashtag fields. These matter as much as the slides for actually getting the
+post seen and shared - do not leave them generic or sparse.
+
+caption_hook:
+
+ONE short sentence or question, <=18 words, naming the specific bug/topic in
+plain language, no jargon. This is ONLY the opening scroll-stopping line,
+never a paragraph.
+
+caption_points:
+
+EXACTLY 3 to 4 array entries, never fewer, never merged into one string.
+Each entry is its OWN short sentence, <=15 words, ONE idea only, plain
+English, no code - together they let someone fully get the concept without
+seeing the slides.
+
+caption_takeaway:
+
+One short closing line, <=15 words, plain language, a clear call to action
+to save/share/follow - may start with a relevant emoji.
+
+seo_keywords:
+
+3 to 5 high-search-volume, evergreen keyword PHRASES developers actually
+type into Google or Instagram search for this exact topic - not single
+generic words. Think like an SEO strategist, not a list-filler:
+
+- Prefer phrases with real, sustained search interest: "javascript interview
+  questions", "react performance optimization", "nextjs server actions
+  explained", "v8 engine internals" - the kind of phrase that keeps getting
+  searched, not a one-off news term.
+- At least 1-2 phrases should be SPECIFIC to today's exact concept (not just
+  generic "javascript tips"), so the post surfaces for people actually
+  searching that mechanism/bug.
+- Never invent a keyword that has nothing to do with the topic just to hit
+  the count. Quality over padding.
+- Flat array of short phrases, no # symbol, no markdown.
+
+hashtags:
+
+10 to 15 hashtags as a flat array (each string includes the # itself),
+deliberately MIXED across three tiers so the post has both broad reach and
+targeted discovery - do not just repeat the same handful of generic tags
+every time:
+
+- 3-4 BROAD/high-volume tags for reach (e.g. #JavaScript #WebDevelopment
+  #Coding #Programming #100DaysOfCode).
+- 5-7 NICHE tags specific to THIS exact topic/technology (e.g. for a V8/
+  performance topic: #V8Engine #JSPerformance #WebPerformance; for a React
+  topic: #ReactJS #ReactHooks #FrontendDevelopment - pick whichever actually
+  match today's concept, don't reuse a fixed list every day).
+- 1-2 COMMUNITY/branded tags (e.g. #DevCommunity #CodeNewbie
+  #ModernJavaScriptHub).
+
+Never return seo_keywords or hashtags as empty arrays - a post with no
+hashtags and no keywords gets far less reach, so always populate both
+fields with genuinely relevant, topic-specific entries per the rules above.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -2834,8 +3628,15 @@ def build_carousel(topic, research):
         raise RuntimeError(f"Gemini response missing slides: {parsed}")
     if not parsed.get("caption_hook") or not parsed.get("caption_points"):
         raise RuntimeError(f"Gemini response missing caption_hook/caption_points: {parsed}")
-    parsed.setdefault("hashtags", [])
-    parsed.setdefault("seo_keywords", [])
+    # seo_keywords/hashtags directly drive discoverability/virality (see the
+    # "CAPTION, SEO & HASHTAGS" section of CAROUSEL_PROMPT_TEMPLATE, which
+    # explicitly tells Gemini never to return these empty) - so an empty
+    # response here is treated the same as a missing caption: fail loudly
+    # instead of silently posting with zero reach-boosting tags/keywords.
+    if not parsed.get("seo_keywords"):
+        raise RuntimeError(f"Gemini response missing/empty seo_keywords: {parsed}")
+    if not parsed.get("hashtags"):
+        raise RuntimeError(f"Gemini response missing/empty hashtags: {parsed}")
     parsed.setdefault("caption_takeaway", f"Follow {BRAND_HANDLE} for more like this.")
     return parsed
 
