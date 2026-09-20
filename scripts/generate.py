@@ -300,69 +300,681 @@ def generate_daily_background():
 SLIDE_IMAGE_MODE = (os.environ.get("SLIDE_IMAGE_MODE") or "ai").strip().lower()
 
 
-def _panel_spec_text(panel, n):
-    lines = panel.get("lines") or []
-    spec = f'  Panel {n} - heading "{panel.get("title", "")}", containing these lines exactly:\n'
-    for line in lines[:5]:
-        spec += f"    * {line}\n"
-    if panel.get("result"):
-        spec += f'    * small highlighted result label: "{panel["result"]}"\n'
-    if panel.get("plain"):
-        spec += (
-            f'    * a short plain-English caption at the bottom of this panel, in a '
-            f'smaller muted font, no jargon: "{panel["plain"]}"\n'
-        )
-    return spec
+# Human-readable label for each of the 8 new slide "type" values, used as the
+# small kicker/eyebrow text on non-hook slides.
+SLIDE_TYPE_LABEL = {
+    "hook": "JS DEEP DIVE",
+    "simple_explanation": "THE IDEA",
+    "code_example": "CODE",
+    "flow": "WHAT HAPPENS",
+    "under_the_hood": "UNDER THE HOOD",
+    "common_mistake": "COMMON MISTAKE",
+    "better_approach": "BETTER APPROACH",
+    "summary": "KEY TAKEAWAY",
+}
 
 
 def _slide_spec_text(slide, index, total, variant=None, topic=None):
-    """Exact, unambiguous description of what must appear on this slide."""
-    kind = slide.get("type", "content")
-    if kind == "title":
-        avatar_line = slide.get("avatar_line") or "Let's break this down!"
-        topic_line = topic or slide.get("title", "")
-        spec = (
-            f'This is the COVER/THUMBNAIL slide ({index} of {total}). Topic: "{topic_line}".\n\n'
-            f'Generate a thumbnail for this topic with a supporting infographic so the '
-            f'thumbnail is eye-catching. Creatively use the attached avatar character so it '
-            f'looks like the avatar wants to explain/say something about this topic - choose '
-            f'his pose, gesture, expression, and placement yourself, in whatever way best '
-            f'sells the topic. Keep his face, clothes, colours and character design exactly '
-            f'as in the attached image - only his pose/expression may change. Use the '
-            f'attached background reference image as the background for this slide.\n\n'
-            f'Text that must appear on the thumbnail, spelled exactly:\n'
-            f'  - small pill label: "{slide.get("kicker", "JS DEEP DIVE")}"\n'
-        )
-        if slide.get("alert"):
-            spec += f'  - a short warning line: "{slide["alert"]}"\n'
-        spec += (
-            f'  - headline: "{slide.get("title", "")}"\n'
-            f'  - subtitle: "{slide.get("subtitle", "")}"\n'
-            f'  - what the avatar is saying, e.g. in a speech bubble near him: "{avatar_line}"\n'
-            f'  - bottom handle: "{BRAND_HANDLE}"\n'
-        )
-        return spec
+    """Exact, unambiguous description of what must appear on this slide, for
+    the flat schema (slide_number/type/title/content/code/visual_type/
+    visual_story/infographic/highlight/design_emphasis)."""
+    kind = slide.get("type", "simple_explanation")
+    label = SLIDE_TYPE_LABEL.get(kind, "JS DEEP DIVE")
+
     if kind == "summary":
-        return (
+        spec = (
             f'This is the closing SUMMARY slide ({index} of {total}).\n'
             f'Text that must appear, spelled exactly:\n'
-            f'  - heading: "{slide.get("heading", "")}"\n'
-            f'  - body text: "{slide.get("body", "")}"\n'
-            f'  - call to action: "{slide.get("cta", "")}"\n'
-            f'  - bottom left handle: "{BRAND_HANDLE}"\n'
+            f'  - small pill label: "{label}"\n'
+            f'  - heading: "{slide.get("title", "")}"\n'
+            f'  - body text: "{slide.get("content", "")}"\n'
         )
+        if slide.get("highlight"):
+            spec += f'  - highlighted takeaway line: "{slide["highlight"]}"\n'
+        spec += f'  - bottom left handle: "{BRAND_HANDLE}"\n'
+        return spec
 
     spec = (
-        f'This is CONTENT slide {index} of {total}.\n'
-        f'Text that must appear, spelled exactly:\n'
-        f'  - slide heading at the top: "{slide.get("heading", "")}"\n'
-        f'  - then a 2x2 grid of four rounded infographic panels, connected by '
-        f'small arrows so the grid reads as one left-to-right, top-to-bottom flow:\n'
+        f'This is CONTENT slide {index} of {total} (visual format: '
+        f'"{slide.get("visual_type", "")}"). No avatar/mascot on this slide - '
+        f'the educational content and infographic are the visual focus.\n\n'
+        f'Visual story to depict: {slide.get("visual_story", "")}\n'
     )
-    for i, panel in enumerate(slide.get("panels", [])[:4], start=1):
-        spec += _panel_spec_text(panel, i)
+    if slide.get("infographic"):
+        spec += f'Infographic instructions: {slide["infographic"]}\n'
+    if slide.get("design_emphasis"):
+        spec += f'Design emphasis: {slide["design_emphasis"]}\n'
+
+    spec += (
+        f'\nText that must appear, spelled exactly:\n'
+        f'  - small pill label: "{label}"\n'
+        f'  - slide heading at the top: "{slide.get("title", "")}"\n'
+        f'  - body/explanation text: "{slide.get("content", "")}"\n'
+    )
+    if slide.get("code"):
+        spec += f'  - code block, character-for-character identical:\n{slide["code"]}\n'
+    if slide.get("highlight"):
+        spec += f'  - a highlighted/emphasized short line: "{slide["highlight"]}"\n'
     spec += f'  - bottom left handle: "{BRAND_HANDLE}"\n'
     return spec
+
+
+# User-authored prompt template for the COVER/THUMBNAIL slide specifically
+# (content slides 2-7 and the summary slide still use the prompt built in
+# generate_slide_image_ai() below - this template is only for the title
+# slide). Only the bracketed placeholders are filled in per day; the
+# wording is used exactly as given, unchanged.
+THUMBNAIL_PROMPT_TEMPLATE = """Create a single finished Instagram carousel COVER/THUMBNAIL slide, portrait 4:5 (1080x1350), for a premium developer-education Instagram account.
+
+The final image must look like a professionally art-directed technology editorial thumbnail, not like a generic Canva template.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. CORE CREATIVE RULE — EVERY THUMBNAIL MUST FEEL NEW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This is extremely important:
+
+Every thumbnail must have a NEW and DISTINCT creative composition.
+
+Do NOT repeatedly use:
+- the same layout
+- the same avatar position
+- the same avatar pose
+- the same facial expression
+- the same background composition
+- the same infographic arrangement
+- the same text placement
+- the same camera angle
+- the same visual metaphor
+- the same card structure
+- the same lighting direction
+
+The brand identity must remain consistent, but the creative execution must change significantly from thumbnail to thumbnail.
+
+Think like a professional Instagram creative director creating a unique cover specifically for this topic.
+
+The thumbnail should immediately communicate:
+1. What is the topic?
+2. Why should a developer care?
+3. What makes this interesting or surprising?
+
+The viewer should understand the basic idea within approximately 1 second.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. CREATIVE STYLE ROTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For THIS thumbnail, independently choose ONE creative direction that best fits the topic.
+
+Possible creative directions:
+
+A. CINEMATIC
+- dramatic lighting
+- cinematic depth
+- large typography
+- close-up or dynamic avatar pose
+- strong foreground/background separation
+
+B. DEVELOPER INVESTIGATION
+- avatar investigating a technical problem
+- magnifying glass
+- hidden issue
+- debugging/investigation atmosphere
+- visual clues and technical evidence
+
+C. BEFORE vs AFTER
+- dramatic comparison
+- fast vs slow
+- correct vs incorrect
+- old vs new
+- healthy vs broken state
+
+D. FUTURISTIC UI
+- avatar interacting with a developer dashboard
+- floating panels
+- performance metrics
+- futuristic interface
+- holographic technical elements
+
+E. COMIC / REACTION
+- expressive avatar
+- exaggerated reaction
+- speech bubble
+- visual storytelling
+- humorous but professional developer aesthetic
+
+F. 3D TECH WORLD
+- oversized JavaScript/code objects
+- strong perspective
+- depth
+- floating technical elements
+- avatar interacting with the environment
+
+G. BREAKING TECH NEWS
+- editorial / breaking-news visual language
+- large warning or discovery
+- dramatic headline
+- technical alert elements
+
+H. MINIMAL EDITORIAL
+- fewer visual elements
+- very strong typography
+- one powerful technical metaphor
+- premium minimal composition
+
+I. VISUAL METAPHOR
+- explain the technical concept through a creative metaphor
+- make the concept visually understandable without relying entirely on text
+
+J. DEBUGGING SCENARIO
+- avatar discovers or fixes a technical issue
+- error indicators
+- code/environment
+- clear problem → consequence relationship
+
+Choose ONE direction.
+
+Do not combine all styles.
+
+The chosen direction should be different from the obvious/template-like composition whenever possible.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. BRAND VISUAL IDENTITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Use the attached background image ONLY as a brand-style reference.
+
+Preserve the overall brand language:
+- deep navy / dark blue environment
+- futuristic developer atmosphere
+- subtle technology aesthetic
+- subtle circuit-board / digital texture
+- cyan / electric blue accents
+- premium dark UI feeling
+- high contrast
+- clean professional developer aesthetic
+
+IMPORTANT:
+
+Do NOT reproduce the attached background exactly.
+
+Create a fresh background specifically for this thumbnail.
+
+You may change:
+- circuit pattern
+- glow placement
+- lighting direction
+- depth
+- perspective
+- technical elements
+- background geometry
+- atmospheric effects
+- visual focal points
+
+The background should feel like it belongs to the same brand family while still being visually new.
+
+Keep the background dark enough for excellent text readability.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. AVATAR — MAKE THE AVATAR PART OF THE STORY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The second attached image contains the mascot/avatar.
+
+Use the EXACT character design from the attached image.
+
+Preserve:
+- face
+- hairstyle
+- clothing
+- colours
+- character identity
+- proportions
+- overall character design
+- recognizable visual features
+
+Remove the original background cleanly.
+
+DO NOT redesign the character.
+
+However, the avatar's:
+- pose
+- body orientation
+- hand gesture
+- facial expression
+- scale
+- camera angle
+- perspective
+- placement
+
+may change creatively.
+
+IMPORTANT:
+
+Do NOT simply place the avatar standing beside the text.
+
+The avatar must be an ACTIVE VISUAL STORYTELLING ELEMENT.
+
+The avatar should look like they are:
+- discovering something
+- explaining something
+- warning the viewer
+- investigating something
+- reacting to something
+- interacting with code
+- interacting with an infographic
+- pointing toward an important detail
+- demonstrating a concept
+- discovering a hidden problem
+- comparing two states
+- using a developer tool/interface
+
+Possible avatar treatments:
+- pointing at a giant technical element
+- holding a magnifying glass
+- examining code
+- looking shocked at a performance graph
+- interacting with a floating UI
+- pulling apart an object
+- sitting on a UI panel
+- emerging from behind the headline
+- holding a warning sign
+- looking toward an important visual element
+- standing inside a technical environment
+- interacting with a before/after comparison
+- partially overlapping the headline
+- appearing in the foreground with strong perspective
+- appearing smaller in the background to create depth
+
+The avatar can be:
+- left
+- right
+- center
+- foreground
+- background
+- partially cropped
+- integrated into the infographic
+- overlapping typography
+- interacting with technical elements
+
+Choose the avatar placement based on the chosen creative direction.
+
+NEVER use the same avatar placement and pose as a default.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. TOPIC-SPECIFIC VISUAL STORY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Do NOT create a generic infographic.
+
+First identify the core technical concept of the topic.
+
+Then create ONE strong visual story that explains that concept.
+
+The visual story should communicate:
+
+PROBLEM
+↓
+WHAT ACTUALLY HAPPENS
+↓
+CONSEQUENCE
+
+Use visual metaphors wherever possible.
+
+For example:
+
+If the topic is about performance:
+FAST → SOMETHING CHANGES → SLOW
+
+If the topic is about an error:
+CODE → ERROR → CONSEQUENCE
+
+If the topic is about React:
+COMPONENT → STATE/RENDER → RESULT
+
+If the topic is about security:
+ACTION → VULNERABILITY → RISK
+
+If the topic is about JavaScript:
+CODE → ENGINE BEHAVIOUR → RESULT
+
+Do not blindly follow these examples.
+
+Create the strongest visual interpretation for the actual topic.
+
+The technical concept should be understandable visually, not only through text.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. INFOGRAPHIC DESIGN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Use technical visual elements only when they strengthen the story.
+
+Possible elements:
+- JavaScript objects
+- code windows
+- code snippets
+- arrows
+- performance graphs
+- speed indicators
+- warning icons
+- error indicators
+- browser UI
+- terminal UI
+- developer dashboards
+- flow diagrams
+- comparison panels
+- magnification circles
+- state transitions
+- network indicators
+- performance meters
+- visual connectors
+- technical diagrams
+
+Infographics must feel integrated into the environment.
+
+Avoid creating a grid of unrelated boxes.
+
+Use:
+- depth
+- perspective
+- scale
+- lighting
+- arrows
+- visual hierarchy
+- subtle glow
+- meaningful colour coding
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. TYPOGRAPHY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Typography should feel premium, modern and highly readable.
+
+Use:
+- bold headline typography
+- strong size hierarchy
+- clean sans-serif typography
+- occasional monospace styling for code
+- high contrast
+- generous spacing
+
+Important words may use:
+- cyan
+- electric blue
+- green
+- orange
+- red
+
+Do not make every word colourful.
+
+Use colour strategically to emphasize the important concept.
+
+The headline must remain readable even when viewed as a small Instagram thumbnail.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. COLOUR SYSTEM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Primary:
+- deep navy
+- dark blue
+- cyan
+- electric blue
+- white
+
+Semantic colours:
+- GREEN = fast / correct / healthy / successful
+- ORANGE = warning / transition
+- RED = error / slow / dangerous / problematic
+
+Use accent colours strategically.
+
+Do not turn the entire image into a rainbow.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. TEXT HIERARCHY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The thumbnail should contain, where appropriate:
+
+1. Small category/topic label
+2. Attention-grabbing hook/warning
+3. Large primary headline
+4. Short explanatory subtitle
+5. Avatar speech bubble or contextual dialogue
+6. Bottom social handle
+
+Do NOT force all elements into fixed positions.
+
+Depending on the chosen creative direction:
+- headline can be left aligned
+- right aligned
+- centered
+- vertically stacked
+- integrated with the visual
+- partially surrounded by graphics
+
+The composition should determine the placement.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. TEXT ACCURACY — ABSOLUTE REQUIREMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Render every required line EXACTLY as provided.
+
+Do NOT:
+- paraphrase
+- translate
+- shorten
+- rewrite
+- add words
+- remove words
+- change punctuation
+- change capitalization
+- invent additional text
+- add lorem ipsum
+
+Any code must be character-for-character identical.
+
+If text becomes difficult to fit, redesign the composition rather than changing the text.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. TEXT TO RENDER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TOPIC:
+"[INSERT TOPIC HERE]"
+
+SMALL LABEL:
+"[INSERT LABEL HERE]"
+
+HOOK / WARNING:
+"[INSERT HOOK HERE]"
+
+HEADLINE:
+"[INSERT HEADLINE HERE]"
+
+SUBTITLE:
+"[INSERT SUBTITLE HERE]"
+
+AVATAR SPEECH:
+"[INSERT AVATAR SPEECH HERE]"
+
+BOTTOM HANDLE:
+"@modernjavascripthub"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12. LAYOUT RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create a custom composition specifically for this topic.
+
+Do NOT use a repetitive template.
+
+Maintain:
+- strong focal point
+- visual hierarchy
+- generous spacing
+- clean alignment
+- safe margins
+- readable text
+- balanced composition
+- strong contrast
+
+Important content must not be clipped at the edges.
+
+Avoid:
+- overcrowding
+- tiny text
+- too many cards
+- excessive borders
+- excessive decorative elements
+- generic stock illustration
+- flat composition
+- repetitive symmetry
+- template-like appearance
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+13. AVATAR + TEXT INTERACTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Whenever appropriate, make the avatar interact visually with the typography.
+
+Examples:
+- avatar pointing toward a keyword
+- avatar looking at the headline
+- avatar partially behind the headline
+- speech bubble connected naturally to avatar
+- avatar holding an element related to the headline
+- avatar reacting to a highlighted word
+- avatar interacting with an arrow or diagram
+- avatar physically interacting with a UI element
+
+The avatar should feel like a presenter inside the story, not a sticker pasted onto the design.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+14. BACKGROUND DEPTH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create multiple visual depth layers:
+
+FOREGROUND:
+avatar / main technical object / headline
+
+MIDGROUND:
+infographics / code / UI / diagrams
+
+BACKGROUND:
+subtle circuits / digital environment / lighting / atmosphere
+
+Use depth and perspective to make the thumbnail visually rich without making it cluttered.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+15. PREMIUM INSTAGRAM THUMBNAIL TEST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Before finalizing, ensure:
+
+✓ It looks visually different from previous thumbnails.
+✓ The avatar is used creatively.
+✓ The avatar is part of the story.
+✓ The topic can be understood quickly.
+✓ The main headline is readable at small size.
+✓ There is one clear visual focal point.
+✓ The composition does not feel like a Canva template.
+✓ The background belongs to the same brand but is not copied.
+✓ The visual metaphor supports the topic.
+✓ The thumbnail creates curiosity.
+✓ Text is not clipped.
+✓ No unnecessary text is added.
+✓ No extra logo or watermark is added.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+16. FINAL RESTRICTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Do NOT add:
+- extra logos
+- watermarks
+- URLs
+- fake social handles
+- unrelated captions
+- random code
+- lorem ipsum
+- additional headlines
+- unrelated icons
+- unrelated characters
+
+Do not change the avatar's identity or clothing.
+
+Do not copy the exact layout of the reference image.
+
+Do not make the avatar stand passively beside the content.
+
+Do not make this look like a generic reusable template.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FINAL CREATIVE INSTRUCTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create ONE finished, premium, eye-catching Instagram thumbnail specifically for the provided topic.
+
+Think like:
+- a senior creative director
+- a technology editorial designer
+- a developer educator
+- an Instagram growth-focused visual designer
+
+Prioritize in this order:
+
+1. Instant visual impact
+2. Curiosity
+3. Topic comprehension
+4. Creative avatar integration
+5. Strong visual storytelling
+6. Typography readability
+7. Premium developer-brand identity
+8. Consistency without repetition
+
+The final thumbnail should feel like a unique editorial cover created specifically for THIS topic — not a variation of the same template."""
+
+
+def build_thumbnail_prompt(slide, topic):
+    """Fills the user-authored THUMBNAIL_PROMPT_TEMPLATE with today's actual
+    content. Only the bracketed placeholders are substituted - the wording
+    around them is used exactly as given.
+
+    Slide 1 now comes from the new flat script schema (slide_number/type/
+    title/content/code/visual_type/visual_story/infographic/highlight/
+    design_emphasis) instead of the old kicker/alert/subtitle/avatar_line
+    fields, so those are derived from the closest equivalent new fields:
+      - label   <- "JS DEEP DIVE" (fixed; the new schema has no short tag)
+      - hook    <- slide["highlight"], falling back to the first sentence
+                   of slide["content"]
+      - headline <- slide["title"]
+      - subtitle <- the first sentence of slide["content"] (a short promise/
+                   summary line, same role the old "subtitle" field played)
+      - avatar speech <- slide["content"] itself (short, in the mascot's
+                   voice), falling back to a generic line
+    """
+    topic_line = topic or slide.get("title", "")
+    content = slide.get("content", "")
+    content_sentences = _split_sentences(content)
+    subtitle = content_sentences[0] if content_sentences else content
+
+    hook = slide.get("highlight") or subtitle
+    avatar_speech = content or "Let me show you what's really going on here!"
+
+    return (
+        THUMBNAIL_PROMPT_TEMPLATE
+        .replace("[INSERT TOPIC HERE]", topic_line)
+        .replace("[INSERT LABEL HERE]", "JS DEEP DIVE")
+        .replace("[INSERT HOOK HERE]", hook)
+        .replace("[INSERT HEADLINE HERE]", slide.get("title", ""))
+        .replace("[INSERT SUBTITLE HERE]", subtitle)
+        .replace("[INSERT AVATAR SPEECH HERE]", avatar_speech)
+    )
 
 
 def generate_slide_image_ai(slide, index, total, variant=None, topic=None):
@@ -371,40 +983,34 @@ def generate_slide_image_ai(slide, index, total, variant=None, topic=None):
     if not os.path.exists(BG_REFERENCE_PATH):
         return None
 
-    is_title = slide.get("type", "content") == "title"
-    spec = _slide_spec_text(slide, index, total, variant=variant, topic=topic)
-
-    prompt = (
-        "Create a single finished Instagram carousel slide, portrait 4:5 "
-        "(1080x1350), for a developer-education account.\n\n"
-        "BACKGROUND: use the attached reference image's background exactly - "
-        "the same deep navy/blue tone with the same subtle glowing circuit-"
-        "board pattern. Keep it dark and low-contrast so text on top is easy "
-        "to read.\n\n"
-        "STYLE: explain the content visually, with infographics - rounded "
-        "bordered panels, clear icons, arrows showing flow between steps, "
-        "monospace-looking code blocks, checkmarks for outputs. Bright cyan/"
-        "blue accents, white body text, green for correct results, orange/red "
-        "for errors. Clean, modern, high contrast, generous spacing, nothing "
-        "cramped or clipped at the edges.\n\n"
-    )
+    is_title = slide.get("type", "simple_explanation") == "hook"
 
     if is_title:
-        prompt += (
-            "CHARACTER: the second attached image is the mascot character. Use "
-            "that exact character, full body, with its background removed so it "
-            "sits cleanly on the slide background - see the instructions below "
-            "for how to pose and place him.\n\n"
+        # The cover/thumbnail uses the user-authored prompt verbatim (see
+        # THUMBNAIL_PROMPT_TEMPLATE above), not the generic wrapper below.
+        prompt = build_thumbnail_prompt(slide, topic)
+    else:
+        spec = _slide_spec_text(slide, index, total, variant=variant, topic=topic)
+        prompt = (
+            "Create a single finished Instagram carousel slide, portrait 4:5 "
+            "(1080x1350), for a developer-education account.\n\n"
+            "BACKGROUND: use the attached reference image's background exactly - "
+            "the same deep navy/blue tone with the same subtle glowing circuit-"
+            "board pattern. Keep it dark and low-contrast so text on top is easy "
+            "to read.\n\n"
+            "STYLE: explain the content visually, with infographics - rounded "
+            "bordered panels, clear icons, arrows showing flow between steps, "
+            "monospace-looking code blocks, checkmarks for outputs. Bright cyan/"
+            "blue accents, white body text, green for correct results, orange/red "
+            "for errors. Clean, modern, high contrast, generous spacing, nothing "
+            "cramped or clipped at the edges.\n\n"
+            "TEXT: render every line of the text below exactly as written, with "
+            "correct spelling - do not paraphrase, translate, invent extra text, or "
+            "add lorem ipsum. Any code must be character-for-character identical to "
+            "what is given.\n\n"
+            f"{spec}\n"
+            "Do not add any other logos, watermarks, URLs or captions."
         )
-
-    prompt += (
-        "TEXT: render every line of the text below exactly as written, with "
-        "correct spelling - do not paraphrase, translate, invent extra text, or "
-        "add lorem ipsum. Any code must be character-for-character identical to "
-        "what is given.\n\n"
-        f"{spec}\n"
-        "Do not add any other logos, watermarks, URLs or captions."
-    )
 
     bg_mime, bg_b64 = _encode_image_b64(BG_REFERENCE_PATH)
     parts = [
@@ -499,16 +1105,6 @@ def draw_check_badge(draw, cx, cy, r=16, fill=CHECK_GREEN):
               fill=(8, 16, 40), width=3, joint="curve")
 
 
-def draw_flow_chevron(draw, cx, cy, direction="right", r=14):
-    """Small circular arrow marker used to visually connect grid panels into a flow."""
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=blend(GRAD_BOTTOM, ACCENT, 0.30),
-                 outline=ACCENT, width=2)
-    if direction == "right":
-        draw.line([(cx - 5, cy - 6), (cx + 4, cy), (cx - 5, cy + 6)], fill=WHITE, width=3, joint="curve")
-    else:
-        draw.line([(cx - 6, cy - 5), (cx, cy + 4), (cx + 6, cy - 5)], fill=WHITE, width=3, joint="curve")
-
-
 def draw_slide_role_icon(draw, cx, cy, role, r=22):
     """Icon badge next to a content slide's heading, signaling its narrative role
     (bug/problem, idea/fix, clock/impact, chart/data, star/pro-tip, warning)."""
@@ -601,10 +1197,8 @@ AVATAR_POSES = {
 }
 
 
-# Cover layouts the title slide rotates through (mascot side + pose), so
-# daily posts don't all share one template. What the mascot points at (a
-# code-diff card or a mini step-diagram) is chosen per-topic by Gemini in
-# cover_visual.style instead, since that depends on the topic, not the day.
+# Cover layouts the title/hook slide rotates through (mascot side + pose), so
+# daily posts don't all share one template.
 COVER_VARIANTS = [
     {"id": "right_pointing", "side": "right", "pose": "pointing"},
     {"id": "left_excited", "side": "left", "pose": "excited"},
@@ -786,120 +1380,10 @@ def draw_side_speech_bubble(draw, anchor_x, cy, text, font, box_w=430, max_lines
     return left, top, box_h, right
 
 
-def draw_cover_compare(draw, x, y, w, visual):
-    """Small before/after infographic on the cover: the slow way in red, the
-    fast way in green, with an arrow between them."""
-    bad_label = visual.get("bad_label") or "The naive way"
-    bad_note = visual.get("bad_note") or "slow path"
-    good_label = visual.get("good_label") or "The right way"
-    good_note = visual.get("good_note") or "stays fast"
-
-    card_h = 112
-    gap = 46
-    lf = load_font("DejaVuSans-Bold.ttf", 27)
-    nf = load_font("DejaVuSans.ttf", 22)
-
-    def card(cy, label, note, color, sign):
-        draw.rounded_rectangle([x, cy, x + w, cy + card_h], radius=16,
-                               fill=blend(PANEL_BG, color, 0.16), outline=color, width=2)
-        # status mark: x for the slow path, check for the fast one
-        mx, my, r = x + 38, cy + card_h / 2, 17
-        draw.ellipse([mx - r, my - r, mx + r, my + r], fill=color)
-        if sign == "bad":
-            draw.line([(mx - 7, my - 7), (mx + 7, my + 7)], fill=(20, 8, 8), width=4)
-            draw.line([(mx - 7, my + 7), (mx + 7, my - 7)], fill=(20, 8, 8), width=4)
-        else:
-            draw.line([(mx - 8, my), (mx - 2, my + 7), (mx + 8, my - 7)],
-                      fill=(6, 24, 14), width=4, joint="curve")
-        for line in wrap_text(draw, label, lf, w - 100)[:1]:
-            draw.text((x + 68, cy + 24), line, font=lf, fill=WHITE)
-        for line in wrap_text(draw, note, nf, w - 100)[:1]:
-            draw.text((x + 68, cy + 60), line, font=nf, fill=color)
-
-    card(y, bad_label, bad_note, ALERT_RED, "bad")
-    arrow_y = y + card_h + gap / 2
-    draw_down_arrow(draw, x + w / 2, y + card_h + 8, arrow_y + 12, color=ACCENT)
-    card(y + card_h + gap, good_label, good_note, CHECK_GREEN, "good")
-    return y + 2 * card_h + gap
-
-
-def draw_cover_code_diff(draw, x, y, w, visual):
-    """Cover visual for code-shaped topics: a real before/after code line
-    (the actual bug and its fix), not a generic label - so the cover reflects
-    today's specific topic instead of a fixed template."""
-    bad_label = visual.get("bad_label") or "Before"
-    good_label = visual.get("good_label") or "After"
-    code_before = visual.get("code_before") or "// buggy line"
-    code_after = visual.get("code_after") or "// fixed line"
-
-    card_h = 230
-    draw.rounded_rectangle([x, y, x + w, y + card_h], radius=20,
-                           fill=blend(PANEL_BG, ACCENT, 0.10), outline=PANEL_BORDER, width=2)
-    tag_f = load_font("DejaVuSans-Bold.ttf", 19)
-    code_f = load_font("DejaVuSansMono-Bold.ttf", 24)
-
-    def code_row(cy, tag, code, color):
-        draw.rounded_rectangle([x + 18, cy, x + 18 + draw.textlength(tag, font=tag_f) + 20, cy + 26],
-                               radius=8, fill=blend(PANEL_BG, color, 0.35))
-        draw.text((x + 28, cy + 3), tag, font=tag_f, fill=color)
-        rows_y = cy + 34
-        draw.rounded_rectangle([x + 18, rows_y, x + w - 18, rows_y + 44], radius=10,
-                               fill=(5, 11, 28), outline=blend(PANEL_BG, color, 0.4), width=1)
-        for line in wrap_text(draw, code, code_f, w - 56)[:1]:
-            draw_code_line(draw, x + 30, rows_y + 9, line, code_f)
-        return rows_y + 44
-
-    row1_bottom = code_row(y + 18, bad_label.upper(), code_before, ALERT_RED)
-    arrow_y = row1_bottom + 22
-    draw_down_arrow(draw, x + w / 2, row1_bottom + 4, arrow_y, color=ACCENT)
-    code_row(arrow_y + 8, good_label.upper(), code_after, CHECK_GREEN)
-    return y + card_h
-
-
-def draw_cover_diagram(draw, x, y, w, visual):
-    """Cover visual for concept-shaped topics: a short connected step-flow
-    (2-4 chips) describing today's mechanism, instead of a generic label."""
-    steps = [str(s) for s in (visual.get("diagram_steps") or [])][:4]
-    if not steps:
-        steps = [visual.get("bad_label") or "The problem", visual.get("good_label") or "The fix"]
-
-    n = len(steps)
-    chip_h, gap = 52, 20
-    card_h = n * chip_h + (n - 1) * gap + 40
-    draw.rounded_rectangle([x, y, x + w, y + card_h], radius=20,
-                           fill=blend(PANEL_BG, ACCENT, 0.10), outline=PANEL_BORDER, width=2)
-    chip_f = load_font("DejaVuSans-Bold.ttf", 22)
-    cy = y + 20
-    for i, step in enumerate(steps):
-        last = i == n - 1
-        tone = CHECK_GREEN if last else ACCENT
-        draw.rounded_rectangle([x + 20, cy, x + w - 20, cy + chip_h], radius=14,
-                               fill=blend(PANEL_BG, tone, 0.18), outline=tone, width=2)
-        for line in wrap_text(draw, step, chip_f, w - 76)[:1]:
-            tw = draw.textlength(line, font=chip_f)
-            draw.text((x + (w - tw) / 2, cy + (chip_h - 26) / 2), line, font=chip_f, fill=WHITE)
-        cy += chip_h
-        if not last:
-            draw_down_arrow(draw, x + w / 2, cy + 2, cy + gap - 2, color=ACCENT)
-            cy += gap
-    return y + card_h
-
-
-def draw_cover_visual(draw, x, y, w, visual):
-    """Dispatches to the cover-visual style Gemini chose for today's topic
-    (code-diff or step-diagram), falling back to the older two-card
-    before/after layout if the response didn't include either."""
-    style = visual.get("style")
-    if not style:
-        style = "code" if visual.get("code_before") else ("diagram" if visual.get("diagram_steps") else "cards")
-    if style == "code":
-        return draw_cover_code_diff(draw, x, y, w, visual)
-    if style == "diagram":
-        return draw_cover_diagram(draw, x, y, w, visual)
-    return draw_cover_compare(draw, x, y, w, visual)
-
-
 def render_title_slide(slide, index, total, out_path, variant=None):
+    """Procedural fallback for the HOOK/cover slide. Reads the new flat
+    schema: title (headline), content (body/hook text - also used as the
+    avatar's speech line), highlight (short warning/hook banner, optional)."""
     variant = variant or COVER_VARIANTS[0]
     side = variant.get("side", "right")
     pose = variant.get("pose", "pointing")
@@ -907,7 +1391,7 @@ def render_title_slide(slide, index, total, out_path, variant=None):
 
     img = make_background(seed=f"{TODAY}-title")
     draw = ImageDraw.Draw(img)
-    kicker = slide.get("kicker", "JS DEEP DIVE")
+    kicker = SLIDE_TYPE_LABEL.get(slide.get("type", "hook"), "JS DEEP DIVE")
     draw_chrome(draw, index, total, kicker=kicker)
 
     margin = 60
@@ -924,9 +1408,14 @@ def render_title_slide(slide, index, total, out_path, variant=None):
                            fill=WARN_ORANGE)
     draw.text((badge_x + 17, 90 + 10), badge_text, font=tag_font, fill=(40, 16, 4))
 
-    # Red alert banner, like the reference cover's warning strip
+    content = slide.get("content", "")
+    content_sentences = _split_sentences(content)
+    subtitle_text = content_sentences[0] if content_sentences else content
+
+    # Red alert banner, like the reference cover's warning strip - driven by
+    # "highlight" now (the new schema's short emphasized-line field).
     y = 158
-    alert = slide.get("alert")
+    alert = slide.get("highlight")
     if alert:
         af = load_font("DejaVuSans-Bold.ttf", 30)
         aw = draw.textlength(alert, font=af) + 96
@@ -945,15 +1434,15 @@ def render_title_slide(slide, index, total, out_path, variant=None):
         draw.text((margin, y), line, font=title_font, fill=HEAD_AMBER)
         y += 72
     y += 8
-    for line in wrap_text(draw, slide.get("subtitle", ""), subtitle_font, W - 2 * margin)[:2]:
+    for line in wrap_text(draw, subtitle_text, subtitle_font, W - 2 * margin)[:2]:
         draw.text((margin, y), line, font=subtitle_font, fill=WHITE)
         y += 40
 
     swipe_font = load_font("DejaVuSans-Bold.ttf", 27)
     draw.text((margin, y + 16), "SWIPE TO LEARN  →", font=swipe_font, fill=ACCENT)
 
-    # Mascot on today's chosen side, "presenting" the before/after visual on
-    # the opposite side of him. Layout + pose rotate daily via `variant`.
+    # Mascot on today's chosen side, speaking the slide's content as a hook
+    # line. Layout + pose rotate daily via `variant`.
     avatar_h = 620
     avatar = load_avatar_cutout(avatar_h, path=get_avatar_pose(pose))
     avatar_w = avatar.width if avatar else 300
@@ -962,21 +1451,6 @@ def render_title_slide(slide, index, total, out_path, variant=None):
     else:
         ax = W - margin - avatar_w + 26
     ay = H - 140 - avatar_h
-
-    compare_w = 460
-    visual = slide.get("cover_visual") or {}
-    v_style = visual.get("style") or ("code" if visual.get("code_before") else
-                                       ("diagram" if visual.get("diagram_steps") else "cards"))
-    if v_style == "diagram":
-        n_steps = max(2, min(4, len(visual.get("diagram_steps") or []) or 2))
-        compare_h = n_steps * 52 + (n_steps - 1) * 20 + 40
-    elif v_style == "cards":
-        compare_h = 2 * 112 + 46
-    else:
-        compare_h = 230
-    compare_top = H - 170 - compare_h
-    compare_x = (W - margin - compare_w) if mirror else margin
-    draw_cover_visual(draw, compare_x, compare_top, compare_w, visual)
 
     if avatar:
         # soft spotlight so he stands out from the busy background
@@ -989,64 +1463,26 @@ def render_title_slide(slide, index, total, out_path, variant=None):
         img = ImageChops.add(img, glow)
         draw = ImageDraw.Draw(img)
 
-        # bubble beside his head, tail pointing at his face, sitting clear
-        # above the comparison visual
+        # bubble beside his head, tail pointing at his face
         bubble_font = load_font("DejaVuSans-Bold.ttf", 25)
-        line = slide.get("avatar_line") or "Hey Devs! Let me show you what actually goes wrong here."
+        line = content or "Hey Devs! Let me show you what actually goes wrong here."
         head_cy = ay + 112
         bubble_side = "left" if mirror else "right"
         anchor_x = (ax + avatar_w - 26) if mirror else (ax + 26)
-        b_left, b_top, b_h, b_right = draw_side_speech_bubble(
+        draw_side_speech_bubble(
             draw, anchor_x, head_cy, line, bubble_font, box_w=430, side=bubble_side
         )
 
         img.paste(avatar, (ax, ay), avatar)
         draw = ImageDraw.Draw(img)
 
-        # smooth curved pointer from under the bubble down to the visual, so
-        # the mascot reads as presenting it, not just standing
-        if mirror:
-            x0, y0 = b_right - 80, b_top + b_h + 6
-            x1 = x0 + 40
-            x2 = compare_x + compare_w * 0.55
-        else:
-            x0, y0 = b_left + 80, b_top + b_h + 6
-            x1 = x0 - 40
-            x2 = compare_x + compare_w * 0.45
-        y2 = compare_top - 14
-        y1 = (y0 + y2) / 2
-        pts = []
-        for i in range(21):
-            t = i / 20
-            pts.append((
-                (1 - t) ** 2 * x0 + 2 * (1 - t) * t * x1 + t * t * x2,
-                (1 - t) ** 2 * y0 + 2 * (1 - t) * t * y1 + t * t * y2,
-            ))
-        draw.line(pts, fill=ACCENT, width=6, joint="curve")
-        draw.polygon([(x2 - 15, y2 - 16), (x2 + 15, y2 - 16), (x2, y2 + 8)], fill=ACCENT)
-
     draw_chrome(draw, index, total, kicker=None)  # repaint footer over avatar edge if needed
     img.save(out_path, "PNG")
 
 
 # ---------------------------------------------------------------------------
-# Content slide: 2x2 infographic panel grid (code / flow / output / mechanics)
+# Content slide: full-width heading + body + optional code block + highlight
 # ---------------------------------------------------------------------------
-def panel_icon(draw, cx, cy, kind):
-    r = 14
-    if kind == "code":
-        draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=ACCENT, width=2)
-        f = load_font("DejaVuSansMono-Bold.ttf", 16)
-        draw.text((cx - 9, cy - 10), "</>", font=f, fill=ACCENT)
-    elif kind == "output":
-        draw.rounded_rectangle([cx - r, cy - r, cx + r, cy + r], radius=4, outline=ACCENT, width=2)
-        draw.line([(cx - 7, cy - 2), (cx - 2, cy + 3), (cx + 7, cy - 6)], fill=ACCENT, width=2)
-    else:  # flow / mechanics
-        draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=ACCENT, width=2)
-        draw.line([(cx - 6, cy), (cx + 6, cy)], fill=ACCENT, width=2)
-        draw.line([(cx + 1, cy - 5), (cx + 6, cy), (cx + 1, cy + 5)], fill=ACCENT, width=2)
-
-
 CODE_KEYWORDS = {
     "function", "const", "let", "var", "return", "if", "else", "for", "while",
     "await", "async", "new", "class", "import", "export", "from", "try",
@@ -1113,190 +1549,6 @@ def draw_down_arrow(draw, cx, y0, y1, color=ACCENT):
     draw.polygon([(cx - 6, y1 - 7), (cx + 6, y1 - 7), (cx, y1 + 1)], fill=color)
 
 
-def _panel_fonts(s):
-    return {
-        "code": load_font("DejaVuSansMono.ttf", max(13, int(20 * s))),
-        "out": load_font("DejaVuSansMono.ttf", max(13, int(21 * s))),
-        "chip": load_font("DejaVuSans-Bold.ttf", max(13, int(20 * s))),
-        "res": load_font("DejaVuSans-Bold.ttf", max(13, int(19 * s))),
-    }
-
-
-def panel_metrics(draw, panel, content_w, s):
-    """Returns (height_needed, fits_width, extras) for this panel at scale `s`.
-    Width matters as much as height: picking a scale on height alone is what
-    made long code lines and output rows spill past the panel border."""
-    fonts = _panel_fonts(s)
-    kind = panel.get("kind", "flow")
-    lines = [str(l) for l in panel.get("lines", [])][:5]
-    if not lines:
-        lines = [""]
-    n = len(lines)
-    fits = True
-    extras = {}
-
-    if kind == "code":
-        inner_w = content_w - int(28 * s)
-        widest = max(draw.textlength(l, font=fonts["code"]) for l in lines)
-        fits = widest <= inner_w
-        h = n * int(28 * s) + int(30 * s)
-
-    elif kind == "output":
-        r = max(8, int(12 * s))
-        text_w = content_w - (2 * r + 20) - 14
-        widest = max(draw.textlength(l, font=fonts["out"]) for l in lines)
-        fits = widest <= text_w
-        h = n * int(42 * s) + int(16 * s)
-
-    else:  # flow chips: allow up to two wrapped lines per chip
-        text_w = content_w - int(28 * s)
-        line_h = int(26 * s)
-        wrapped_all, max_lines = [], 1
-        for line in lines:
-            wrapped = wrap_text(draw, line, fonts["chip"], text_w)
-            if len(wrapped) > 2:
-                fits = False
-                wrapped = wrapped[:2]
-            wrapped_all.append(wrapped)
-            max_lines = max(max_lines, len(wrapped))
-        chip_h = max_lines * line_h + int(20 * s)
-        extras = {"wrapped": wrapped_all, "chip_h": chip_h, "line_h": line_h}
-        h = n * chip_h + (n - 1) * int(26 * s)
-
-    result = panel.get("result")
-    if result:
-        h += int(40 * s)
-        if draw.textlength(result, font=fonts["res"]) + int(60 * s) > content_w:
-            fits = False
-
-    plain = panel.get("plain")
-    if plain:
-        plain_font = load_font("DejaVuSans-Oblique.ttf", 16) or load_font("DejaVuSans.ttf", 16)
-        plain_lines = wrap_text(draw, plain, plain_font, content_w)[:2]
-        extras["plain_lines"] = plain_lines
-        h += len(plain_lines) * 20 + 12
-
-    return h, fits, extras
-
-
-def panel_content_height(draw, panel, content_w, s):
-    return panel_metrics(draw, panel, content_w, s)[0]
-
-
-def render_panel(draw, x, y, w, h, panel):
-    draw.rounded_rectangle([x, y, x + w, y + h], radius=18, fill=PANEL_BG,
-                           outline=PANEL_BORDER, width=2)
-    # Header strip, so the title reads as a label band like the reference.
-    draw.rounded_rectangle([x + 2, y + 2, x + w - 2, y + 56], radius=16,
-                           fill=blend(PANEL_BG, ACCENT, 0.10))
-    draw.line([(x + 14, y + 56), (x + w - 14, y + 56)], fill=blend(PANEL_BG, ACCENT, 0.35), width=2)
-
-    header_font = load_font("DejaVuSans-Bold.ttf", 24)
-    panel_icon(draw, x + 34, y + 30, panel.get("kind", "flow"))
-    draw.text((x + 58, y + 16), panel.get("title", ""), font=header_font, fill=WHITE)
-
-    pad = 20
-    content_x = x + pad
-    content_w = w - 2 * pad
-    area_top = y + 66
-    area_h = h - 66 - 14
-
-    lines = [str(l) for l in panel.get("lines", [])][:5]
-    kind = panel.get("kind", "flow")
-    result = panel.get("result")
-
-    # Pick the largest scale whose content fits BOTH vertically and
-    # horizontally, so sparse content grows to fill the panel while long code
-    # lines shrink instead of spilling past the border.
-    candidates = (2.5, 2.2, 2.0, 1.85, 1.7, 1.55, 1.4, 1.3, 1.2, 1.1, 1.0,
-                  0.92, 0.85, 0.78, 0.7, 0.62, 0.55)
-    s, needed, extras = candidates[-1], None, {}
-    for candidate in candidates:
-        h_need, fits, ex = panel_metrics(draw, panel, content_w, candidate)
-        if fits and h_need <= area_h:
-            s, needed, extras = candidate, h_need, ex
-            break
-    if needed is None:  # nothing fit cleanly - use the smallest and clip gracefully
-        needed, _, extras = panel_metrics(draw, panel, content_w, s)
-
-    fonts = _panel_fonts(s)
-    cy = area_top + max(0, (area_h - needed) // 2)
-
-    if kind == "code":
-        code_font = fonts["code"]
-        line_h = int(28 * s)
-        block_h = len(lines) * line_h + int(30 * s)
-        draw.rounded_rectangle([content_x, cy, x + w - pad, cy + block_h], radius=12,
-                               fill=(5, 11, 28), outline=blend(PANEL_BG, ACCENT, 0.30), width=1)
-        ty = cy + int(15 * s)
-        for line in lines:
-            draw_code_line(draw, content_x + int(14 * s), ty, line, code_font)
-            ty += line_h
-        cy += block_h
-
-    elif kind == "output":
-        line_font = fonts["out"]
-        item_h = int(42 * s)
-        r = max(8, int(12 * s))
-        for line in lines:
-            neg = is_negative(line)
-            tint = ALERT_RED if neg else ACCENT
-            draw.rounded_rectangle([content_x, cy, x + w - pad, cy + item_h - int(8 * s)],
-                                   radius=10, fill=blend(PANEL_BG, tint, 0.09))
-            draw_status_badge(draw, content_x + r + 8, cy + (item_h - int(8 * s)) // 2, r, neg)
-            draw.text((content_x + 2 * r + 20, cy + int(7 * s)), line, font=line_font, fill=WHITE)
-            cy += item_h
-
-    else:  # flow / mechanics: chips chained with real arrows between them
-        item_font = fonts["chip"]
-        chip_h = extras.get("chip_h", int(46 * s))
-        line_h = extras.get("line_h", int(26 * s))
-        wrapped_all = extras.get("wrapped") or [[l] for l in lines]
-        arrow_h = int(26 * s)
-        for i, wrapped in enumerate(wrapped_all):
-            last = i == len(wrapped_all) - 1
-            neg = is_negative(" ".join(wrapped))
-            if last:
-                tone = ALERT_RED if neg else CHECK_GREEN
-            else:
-                tone = ALERT_RED if neg else ACCENT
-            chip_fill = blend(PANEL_BG, tone, 0.17)
-            chip_edge = tone
-            draw.rounded_rectangle([content_x, cy, x + w - pad, cy + chip_h], radius=12,
-                                   fill=chip_fill, outline=chip_edge, width=2)
-            ty = cy + (chip_h - len(wrapped) * line_h) / 2
-            for part in wrapped:
-                tw = draw.textlength(part, font=item_font)
-                draw.text((content_x + (content_w - tw) / 2, ty), part, font=item_font, fill=WHITE)
-                ty += line_h
-            cy += chip_h
-            if not last:
-                draw_down_arrow(draw, x + w / 2, cy + 4, cy + arrow_h - 2)
-                cy += arrow_h
-
-    if result:
-        rf = fonts["res"]
-        neg = is_negative(result)
-        tone = ALERT_RED if neg else CHECK_GREEN
-        badge_w = draw.textlength(result, font=rf) + int(52 * s)
-        bh = int(34 * s)
-        by = min(cy + int(8 * s), y + h - bh - 10)
-        bx = x + (w - badge_w) / 2
-        draw.rounded_rectangle([bx, by, bx + badge_w, by + bh], radius=bh / 2,
-                               fill=blend(PANEL_BG, tone, 0.22), outline=tone, width=2)
-        draw_status_badge(draw, bx + int(19 * s), by + bh / 2, max(8, int(11 * s)), neg)
-        draw.text((bx + int(36 * s), by + (bh - int(22 * s)) / 2), result, font=rf, fill=tone)
-        cy = by + bh
-
-    plain_lines = extras.get("plain_lines")
-    if plain_lines:
-        plain_font = load_font("DejaVuSans-Oblique.ttf", 16) or load_font("DejaVuSans.ttf", 16)
-        py = min(cy + 10, y + h - len(plain_lines) * 20 - 8)
-        for line in plain_lines:
-            draw.text((content_x, py), line, font=plain_font, fill=MUTED)
-            py += 20
-
-
 def draw_series_banner(draw, cy, text="JAVASCRIPT DEEP DIVE SERIES"):
     """Centred series banner, like the reference slide's bottom strip."""
     font = load_font("DejaVuSans-Bold.ttf", 22)
@@ -1313,64 +1565,152 @@ def draw_series_banner(draw, cy, text="JAVASCRIPT DEEP DIVE SERIES"):
     draw.text((bx + 52, cy + (bh - 26) / 2), text, font=font, fill=WHITE)
 
 
+# Maps a slide "type" to the role icon shown next to its heading (reusing
+# draw_slide_role_icon's existing bug/warning/idea/clock/chart/star glyphs).
+TYPE_ROLE = {
+    "hook": "warning",
+    "simple_explanation": "idea",
+    "code_example": "bug",
+    "flow": "clock",
+    "under_the_hood": "idea",
+    "common_mistake": "bug",
+    "better_approach": "idea",
+    "summary": "star",
+}
+
+
+def _fit_paragraph(draw, text, max_width, max_height, start_size=34, min_size=22):
+    """Pick the largest font size (within range) whose wrapped text fits
+    max_height, returning (font, lines)."""
+    text = text or ""
+    for size in range(start_size, min_size - 1, -2):
+        font = load_font("DejaVuSans.ttf", size)
+        lines = wrap_text(draw, text, font, max_width)
+        line_h = size * 1.45
+        if len(lines) * line_h <= max_height:
+            return font, lines, line_h
+    font = load_font("DejaVuSans.ttf", min_size)
+    lines = wrap_text(draw, text, font, max_width)
+    line_h = min_size * 1.45
+    max_lines = max(1, int(max_height // line_h))
+    return font, lines[:max_lines], line_h
+
+
+def _fit_code_lines(raw_code, max_chars=34):
+    """Split a code string (from the new flat schema's "code" field, which
+    may be a single multi-line string) into short display lines."""
+    if not raw_code:
+        return []
+    lines = []
+    for raw_line in str(raw_code).splitlines():
+        raw_line = raw_line.rstrip()
+        if not raw_line:
+            continue
+        if len(raw_line) <= max_chars:
+            lines.append(raw_line)
+        else:
+            # Wrap long lines on whitespace so nothing gets cut mid-token.
+            words = raw_line.split(" ")
+            cur = ""
+            for w in words:
+                trial = (cur + " " + w).strip()
+                if len(trial) <= max_chars:
+                    cur = trial
+                else:
+                    if cur:
+                        lines.append(cur)
+                    cur = w
+            if cur:
+                lines.append(cur)
+    return lines[:8]
+
+
+def draw_code_card(draw, x, y, w, code_lines):
+    """Monospace code block with light syntax colouring - same visual
+    language as the old panel code blocks, just sized to the new full-width
+    content slide layout."""
+    code_font = load_font("DejaVuSansMono.ttf", 24)
+    line_h = 34
+    pad = 20
+    block_h = len(code_lines) * line_h + 2 * pad
+    draw.rounded_rectangle([x, y, x + w, y + block_h], radius=14,
+                           fill=(5, 11, 28), outline=blend(PANEL_BG, ACCENT, 0.30), width=1)
+    ty = y + pad
+    for line in code_lines:
+        draw_code_line(draw, x + pad, ty, line, code_font)
+        ty += line_h
+    return block_h
+
+
+def draw_highlight_chip(draw, x, y, w, text):
+    """Short emphasized line (the new schema's "highlight" field) shown as a
+    colored pill/banner beneath the body text."""
+    neg = is_negative(text)
+    tone = ALERT_RED if neg else CHECK_GREEN
+    font = load_font("DejaVuSans-Bold.ttf", 26)
+    lines = wrap_text(draw, text, font, w - 90)[:2]
+    line_h = 32
+    pad = 18
+    box_h = len(lines) * line_h + 2 * pad
+    draw.rounded_rectangle([x, y, x + w, y + box_h], radius=16,
+                           fill=blend(PANEL_BG, tone, 0.20), outline=tone, width=2)
+    draw_status_badge(draw, x + 34, y + box_h / 2, 15, neg)
+    ty = y + pad
+    for line in lines:
+        draw.text((x + 62, ty), line, font=font, fill=tone)
+        ty += line_h
+    return box_h
+
+
 def render_content_slide(slide, index, total, out_path):
+    """Procedural fallback for a body slide under the new flat schema
+    (simple_explanation / code_example / flow / under_the_hood /
+    common_mistake / better_approach). Layout: heading, body paragraph,
+    optional code block, optional highlighted takeaway line - no panel grid."""
     img = make_background(seed=f"{TODAY}-{index}")
     draw = ImageDraw.Draw(img)
-    draw_chrome(draw, index, total, kicker=f"STEP {index - 1}")
+    kind = slide.get("type", "simple_explanation")
+    draw_chrome(draw, index, total, kicker=SLIDE_TYPE_LABEL.get(kind, f"STEP {index - 1}"))
 
     margin = 60
     heading_font = load_font("DejaVuSans-Bold.ttf", 46)
     y = 176
-    draw_slide_role_icon(draw, margin + 22, y + 30, slide.get("icon"), r=22)
-    heading_lines = wrap_text(draw, slide.get("heading", ""), heading_font, W - 2 * margin - 60)[:2]
+    draw_slide_role_icon(draw, margin + 22, y + 30, TYPE_ROLE.get(kind, "idea"), r=22)
+    heading_lines = wrap_text(draw, slide.get("title", ""), heading_font, W - 2 * margin - 60)[:2]
     for line in heading_lines:
         draw.text((margin + 56, y), line, font=heading_font, fill=WHITE)
         y += 58
-    y += 20
+    y += 28
 
-    panels = slide.get("panels", [])[:4]
-    while len(panels) < 4:
-        panels.append({"title": "", "kind": "flow", "lines": []})
+    content_w = W - 2 * margin
+    bottom_limit = H - 150  # leave room for the series banner + footer
+    code_lines = _fit_code_lines(slide.get("code", ""))
+    highlight = slide.get("highlight", "")
 
-    grid_top = y
-    grid_bottom = H - 150  # leave room for the series banner + footer
-    gap = 22
-    panel_w = (W - 2 * margin - gap) / 2
-    avail = grid_bottom - grid_top - gap
+    # Reserve space for the code block and highlight chip (if present) first,
+    # then give whatever remains to the body paragraph.
+    reserved = 0
+    if code_lines:
+        reserved += len(code_lines) * 34 + 40 + 24  # block height + gap
+    if highlight:
+        reserved += 34 * 2 + 36 + 24  # up to 2 lines + padding + gap
 
-    # Row heights follow the content. Each panel's "ideal" height is what it
-    # needs at the largest scale its text can take without overflowing; a row
-    # never grows past that, so short content doesn't get a huge empty box.
-    def panel_ideal(panel):
-        for candidate in (2.5, 2.2, 2.0, 1.85, 1.7, 1.55, 1.4, 1.3, 1.2, 1.1, 1.0):
-            h, fits, _ = panel_metrics(draw, panel, panel_w - 40, candidate)
-            if fits:
-                return h + 86
-        return 260
+    body_max_h = max(80, bottom_limit - y - reserved)
+    body_font, body_lines, body_line_h = _fit_paragraph(
+        draw, slide.get("content", ""), content_w, body_max_h
+    )
+    for line in body_lines:
+        draw.text((margin, y), line, font=body_font, fill=MUTED)
+        y += body_line_h
+    y += 24
 
-    row_ideal = [max(panel_ideal(panels[r * 2]), panel_ideal(panels[r * 2 + 1])) for r in range(2)]
-    total_ideal = sum(row_ideal)
+    if code_lines:
+        block_h = draw_code_card(draw, margin, y, content_w, code_lines)
+        y += block_h + 24
 
-    if total_ideal <= avail:
-        row_h = row_ideal
-        grid_top += (avail - total_ideal) * 0.35  # sit nearer the heading, not dead centre
-    else:
-        row_h = [avail * (n / total_ideal) for n in row_ideal]
-
-    for i, panel in enumerate(panels):
-        col, row = i % 2, i // 2
-        px = margin + col * (panel_w + gap)
-        py = grid_top + (0 if row == 0 else row_h[0] + gap)
-        render_panel(draw, px, py, panel_w, row_h[row], panel)
-
-    # Connect the 4 panels into a visual flow: -> across each row, v down each column
-    hgap_x = margin + panel_w + gap / 2
-    draw_flow_chevron(draw, hgap_x, grid_top + row_h[0] / 2, "right")
-    draw_flow_chevron(draw, hgap_x, grid_top + row_h[0] + gap + row_h[1] / 2, "right")
-
-    vgap_y = grid_top + row_h[0] + gap / 2
-    draw_flow_chevron(draw, margin + panel_w / 2, vgap_y, "down")
-    draw_flow_chevron(draw, margin + panel_w + gap + panel_w / 2, vgap_y, "down")
+    if highlight:
+        chip_h = draw_highlight_chip(draw, margin, y, content_w, highlight)
+        y += chip_h + 24
 
     draw_series_banner(draw, H - 126)
     img.save(out_path, "PNG")
@@ -1380,6 +1720,10 @@ def render_content_slide(slide, index, total, out_path):
 # Summary slide
 # ---------------------------------------------------------------------------
 def render_summary_slide(slide, index, total, out_path):
+    """Procedural fallback for the closing SUMMARY slide. New schema: title
+    (heading), content (the 3-4 short takeaways as one body string),
+    highlight (short memorable line) - "cta" no longer exists, so a generic
+    follow CTA is synthesized."""
     img = make_background(seed=f"{TODAY}-summary")
     draw = ImageDraw.Draw(img)
     draw_chrome(draw, index, total, kicker="KEY TAKEAWAY")
@@ -1390,16 +1734,21 @@ def render_summary_slide(slide, index, total, out_path):
     cta_font = load_font("DejaVuSans-Bold.ttf", 34)
 
     y = 260
-    for line in wrap_text(draw, slide.get("heading", ""), heading_font, W - 2 * margin)[:3]:
+    for line in wrap_text(draw, slide.get("title", ""), heading_font, W - 2 * margin)[:3]:
         draw.text((margin, y), line, font=heading_font, fill=WHITE)
         y += 70
     y += 20
-    for line in wrap_text(draw, slide.get("body", ""), body_font, W - 2 * margin)[:6]:
+    for line in wrap_text(draw, slide.get("content", ""), body_font, W - 2 * margin)[:6]:
         draw.text((margin, y), line, font=body_font, fill=MUTED)
         y += 46
-    y += 50
+    if slide.get("highlight"):
+        hf = load_font("DejaVuSans-Bold.ttf", 30)
+        for line in wrap_text(draw, slide["highlight"], hf, W - 2 * margin)[:2]:
+            draw.text((margin, y), line, font=hf, fill=ACCENT)
+            y += 40
+    y += 30
 
-    cta = slide.get("cta", f"Follow {BRAND_HANDLE} for daily JS/React/Next.js tips")
+    cta = f"Follow {BRAND_HANDLE} for daily JS/React/Next.js tips"
     cta_lines = wrap_text(draw, cta, cta_font, W - 2 * margin - 60)
     box_h = 60 + len(cta_lines) * 42
     draw.rounded_rectangle([margin, y, W - margin, y + box_h], radius=18, fill=PANEL_BG, outline=ACCENT, width=2)
@@ -1443,8 +1792,8 @@ def render_slide(slide, index, total, out_path, variant=None, topic=None):
             file=sys.stderr,
         )
 
-    kind = slide.get("type", "content")
-    if kind == "title":
+    kind = slide.get("type", "simple_explanation")
+    if kind == "hook":
         render_title_slide(slide, index, total, out_path, variant=variant)
     elif kind == "summary":
         render_summary_slide(slide, index, total, out_path)
@@ -1714,137 +2063,754 @@ Plain text only."""
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def build_carousel(topic, research):
-    prompt = f"""You are the content writer for "Modern JavaScript Hub", an Instagram +
-Telegram account ({BRAND_HANDLE}) that teaches ADVANCED JavaScript, React,
-and Next.js to intermediate/senior developers - the non-obvious stuff that
-causes real bugs, not textbook basics. Tone: clear, confident, precise -
-like a sharp senior engineer explaining a bug in code review, in plain
-language a reader can follow on a quick scroll. Keep the TOPIC advanced and
-narrow, but keep the EXPLANATION simple: prefer short, everyday words and a
-quick analogy over dense jargon, and always pair any technical term (hidden
-class, tree-shaking, memoization, etc.) with a one-clause plain-English
-translation the first time it's used. Every claim must be technically
-correct per the research below.
+# User-authored prompt for the carousel SCRIPT (text model). Only {topic} and
+# {research} are substituted - the wording is used exactly as given. Note the
+# JSON shape here is intentionally different from the old one (flat
+# title/content/code/visual_type fields per slide, no "panels", no avatar) -
+# the whole rendering pipeline below is built to consume THIS shape.
+CAROUSEL_PROMPT_TEMPLATE = """You are the senior technical content writer and instructional designer for
+"Modern JavaScript Hub", an Instagram + Telegram account
+(@modernjavascripthub).
 
-Topic: {topic}
+The account teaches ADVANCED JavaScript, React, and Next.js to
+intermediate and senior developers.
 
-Research briefing (base the content on this, don't just repeat it verbatim):
+The goal is NOT to teach textbook basics.
+
+Focus on:
+- non-obvious JavaScript behaviour
+- hidden performance costs
+- browser behaviour
+- JavaScript engine behaviour
+- V8 internals
+- React rendering behaviour
+- async behaviour
+- memory
+- closures
+- event loop
+- race conditions
+- rendering
+- caching
+- browser APIs
+- performance
+- subtle bugs
+- common senior-level mistakes
+- counterintuitive behaviour
+
+However, the explanation must remain SIMPLE.
+
+Think like a senior engineer explaining a tricky issue during a code review.
+
+Use:
+- short sentences
+- simple everyday language
+- practical examples
+- small analogies
+- short code
+- visual explanations
+
+Avoid:
+- academic language
+- unnecessary jargon
+- long paragraphs
+- textbook definitions
+- vague statements
+- unnecessary complexity
+
+Every technical term must be explained in simple language the first time it
+appears.
+
+Example:
+
+"Hidden class — V8's internal shape for an object."
+
+Do NOT assume the reader already understands the internal concept.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TOPIC
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Topic:
+{topic}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RESEARCH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Use the following research briefing as the factual source.
+
+Do NOT simply rewrite it.
+
+Extract the most useful and surprising insight from it and turn it into a
+clear educational story.
+
+Research briefing:
 ---
 {research}
 ---
 
-Produce a JSON object (ONLY JSON, no markdown fences) with this exact shape:
+Every technical claim must be supported by the research or established
+JavaScript behaviour.
+
+Do not invent benchmarks, numbers, browser behaviour or implementation details.
+
+If the research says "can", do not rewrite it as "always".
+
+If behaviour depends on an engine, browser, version or implementation,
+make that limitation clear.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CORE OBJECTIVE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Create an 8-slide Instagram carousel that teaches ONE narrow technical idea.
+
+The reader should be able to understand the concept by progressing through
+the slides.
+
+The carousel should answer:
+
+1. What is the problem?
+2. Why does it happen?
+3. What is actually happening?
+4. Can I see it in code?
+5. What happens internally?
+6. What mistake do developers commonly make?
+7. What should I do instead?
+8. What should I remember?
+
+Do NOT repeat the same explanation across multiple slides.
+
+Each slide must add NEW information.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SLIDE STRUCTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Exactly 8 slides.
+
+SLIDE 1 — HOOK
+
+Purpose:
+Stop the scroll and introduce the surprising technical problem.
+
+Must contain:
+- short hook
+- topic
+- curiosity
+- very short supporting statement
+
+Do NOT explain everything on Slide 1.
+
+The reader should want to swipe.
+
+Visual concept:
+A strong editorial/technical visual that represents the problem.
+
+Possible visual:
+- warning
+- before/after
+- performance drop
+- surprising result
+- broken flow
+- large keyword
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SLIDE 2 — SIMPLE EXPLANATION
+
+Purpose:
+Explain the core idea in very simple language.
+
+Use:
+- a short analogy OR
+- a simple real-world comparison OR
+- a simple visual model
+
+Avoid deep implementation details.
+
+The reader should think:
+
+"Oh, that's what's happening."
+
+Visual concept:
+Prefer an infographic or simple visual metaphor.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SLIDE 3 — CODE EXAMPLE
+
+Purpose:
+Show the smallest useful JavaScript example.
+
+Use minimal code.
+
+Code should demonstrate the exact behaviour being discussed.
+
+Prefer:
+5–12 lines maximum.
+
+Avoid unnecessary setup code.
+
+Code lines should ideally remain under 30 characters.
+
+If a longer line is technically necessary, split it into multiple lines.
+
+Highlight the important line.
+
+Explain the important line in one or two short sentences.
+
+Visual concept:
+Code editor + highlighted line + arrows/callouts.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SLIDE 4 — WHAT HAPPENS
+
+Purpose:
+Show the actual sequence of events.
+
+Explain the mechanism step-by-step.
+
+Use a FLOW DIAGRAM whenever possible.
+
+Preferred structure:
+
+ACTION
+   ↓
+INTERNAL CHANGE
+   ↓
+ENGINE BEHAVIOUR
+   ↓
+RESULT
+
+Do not describe a flow only with paragraphs.
+
+Represent the flow visually.
+
+Use 3–5 steps maximum.
+
+Each step should have:
+- short label
+- short explanation
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SLIDE 5 — UNDER THE HOOD
+
+Purpose:
+Explain the deeper technical reason.
+
+This is the "senior developer" slide.
+
+Use simplified technical diagrams where appropriate.
+
+Possible infographic types:
+- object shape diagram
+- memory diagram
+- event loop diagram
+- call stack diagram
+- rendering pipeline
+- dependency graph
+- state transition
+- cache lookup
+- browser pipeline
+- V8 engine flow
+- React render flow
+
+IMPORTANT:
+
+Simplify internal concepts without making them technically incorrect.
+
+Do not create fake internal mechanisms merely to make the diagram look
+interesting.
+
+The infographic should explain the mechanism, not decorate the slide.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SLIDE 6 — COMMON MISTAKE
+
+Purpose:
+Show what developers commonly do wrong.
+
+Use:
+
+❌ Common approach
+↓
+WHY IT CAUSES THE PROBLEM
+
+Then optionally:
+
+✓ Better approach
+
+Keep the explanation short.
+
+Use a visual comparison whenever possible.
+
+For example:
+
+❌ BAD
+code
+
+        VS
+
+✓ BETTER
+code
+
+Do not shame the developer.
+
+Explain the trade-off.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SLIDE 7 — BETTER APPROACH / PRACTICAL RULE
+
+Purpose:
+Give the reader something actionable.
+
+Answer:
+
+"What should I actually do in real code?"
+
+Show:
+- recommended pattern
+- practical rule
+- when the advice matters
+- when it does NOT matter
+
+Use a compact code example or decision flow.
+
+Preferred visual:
+
+IF
+↓
+DO THIS
+
+OTHERWISE
+↓
+THIS IS FINE
+
+Do not overgeneralize.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SLIDE 8 — SUMMARY
+
+Purpose:
+Make the concept memorable.
+
+Use 3–4 short takeaways.
+
+Format:
+
+KEY IDEA
+→ ...
+
+WHY
+→ ...
+
+AVOID
+→ ...
+
+REMEMBER
+→ ...
+
+End with a concise practical takeaway.
+
+Do NOT introduce new technical information on this slide.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+VISUAL STORYTELLING REQUIREMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Every slide MUST include a visual explanation strategy.
+
+Do not make all slides:
+
+"text + code block + background".
+
+For each slide, decide which visual format best explains the content.
+
+Allowed visual formats:
+
+1. CODE + CALLOUTS
+2. FLOW DIAGRAM
+3. BEFORE → AFTER
+4. COMPARISON
+5. TIMELINE
+6. PROCESS DIAGRAM
+7. OBJECT DIAGRAM
+8. MEMORY DIAGRAM
+9. STATE TRANSITION
+10. PERFORMANCE GRAPH
+11. DECISION TREE
+12. CAUSE → EFFECT
+13. LAYERED ARCHITECTURE
+14. VISUAL METAPHOR
+15. DEBUGGING DIAGRAM
+16. UNDER-THE-HOOD DIAGRAM
+
+Prefer infographics whenever they can explain the concept more clearly than
+text.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+INFOGRAPHIC RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Infographics must be educational, not decorative.
+
+Every diagram must answer at least one question:
+
+- What changed?
+- Why did it change?
+- What happens next?
+- What is connected to what?
+- What is faster/slower?
+- What is correct/wrong?
+- What happens internally?
+
+Use:
+- arrows
+- numbered steps
+- highlighted nodes
+- before/after states
+- simple diagrams
+- visual grouping
+- short labels
+
+Avoid:
+- decorative arrows with no meaning
+- excessive boxes
+- complicated architecture diagrams
+- tiny labels
+- too many nodes
+- visual clutter
+
+A user should be able to understand the infographic without reading a
+large paragraph.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+VISUAL PROGRESSION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The 8 slides should visually progress like a story.
+
+Recommended progression:
+
+SLIDE 1
+Problem / curiosity
+
+↓
+
+SLIDE 2
+Simple mental model
+
+↓
+
+SLIDE 3
+Real code
+
+↓
+
+SLIDE 4
+Step-by-step flow
+
+↓
+
+SLIDE 5
+Under the hood
+
+↓
+
+SLIDE 6
+Common mistake
+
+↓
+
+SLIDE 7
+Better approach
+
+↓
+
+SLIDE 8
+Takeaway
+
+Do not use the same infographic type on every slide.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CODE RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Code is an educational illustration, not a full production implementation.
+
+Prefer the smallest code that proves the point.
+
+Rules:
+
+- Keep code short.
+- Prefer 5–12 lines.
+- Keep individual lines under 30 characters whenever practical.
+- Never invent APIs.
+- Never modify JavaScript syntax incorrectly.
+- Do not remove code required to demonstrate the behaviour.
+- Highlight the important line.
+- Explain what the highlighted line does.
+- Use comments only when absolutely necessary.
+
+If the concept cannot be accurately demonstrated in a tiny snippet,
+use a simplified but valid example and explain the limitation.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEXT RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+All on-image text must be short and punchy.
+
+This is an Instagram 1080x1350 slide.
+
+Avoid paragraphs.
+
+Preferred:
+
+1 short headline
+
++
+
+1–3 short explanation blocks
+
++
+
+code/diagram
+
+Instead of:
+
+A large paragraph explaining the concept.
+
+Every slide should be scannable in approximately 3–5 seconds.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TITLE RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Slide titles should usually be:
+
+4–10 words.
+
+Use specific language.
+
+BAD:
+"Understanding JavaScript Objects"
+
+BETTER:
+"Why delete Changes the Object's Shape"
+
+BAD:
+"Let's Learn About Performance"
+
+BETTER:
+"Your Object Just Left the Fast Path"
+
+Titles should create clarity or curiosity.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ANALOGIES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Use an analogy only when it makes the technical concept easier.
+
+Good analogy:
+
+"Think of a hidden class like a blueprint V8 uses
+to recognize objects with the same shape."
+
+Then connect the analogy back to the actual mechanism.
+
+Do NOT let the analogy replace the technical explanation.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NO AVATAR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Do NOT include the mascot/avatar in any slide.
+
+The educational content, code and infographic should be the visual focus.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+INSTAGRAM READABILITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Design content specifically for a mobile screen.
+
+Prioritize:
+
+- large readable headlines
+- short text
+- high contrast
+- clear hierarchy
+- visual separation
+- simple diagrams
+- readable code
+- generous spacing
+
+Never sacrifice readability just to fit more information.
+
+If there is too much information:
+
+REMOVE unnecessary information.
+
+Do NOT shrink the text.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OUTPUT FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Return ONLY valid JSON.
+
+No markdown.
+No code fences.
+No explanation outside JSON.
+
+Use exactly this structure:
 
 {{
   "slides": [
     {{
-      "type": "title",
-      "kicker": "3-4 word label, e.g. JS DEEP DIVE",
-      "title": "punchy 5-9 word hook naming the specific bug/gotcha",
-      "subtitle": "one short sentence promising the fix they'll learn",
-      "alert": "a 3-6 word red-warning banner line for the top of the cover,
-        phrased as a blunt warning, e.g. 'Stop Writing useEffect Like This!'
-        or 'This Kills Your Render Perf!'",
-      "avatar_line": "what the mascot character says in a speech bubble - 12
-        to 22 words, written as if he is personally talking to the viewer and
-        about to show them something: an opener, the surprising fact, and a
-        hook. e.g. 'Hey Devs! Did you know delete can make your objects up to
-        10x slower? Let me show you why!'",
-      "cover_visual": {{
-        "style": "'code' if the bug/fix is best shown as one real short line of
-          code before vs after, 'diagram' if it's better shown as a short
-          chain of 2-4 concept steps that don't reduce to one code line -
-          pick whichever genuinely fits THIS topic, don't default to the same
-          one every time",
-        "bad_label": "1-2 word tag for the 'before'/wrong side, e.g. 'Before'",
-        "good_label": "1-2 word tag for the 'after'/right side, e.g. 'After'",
-        "code_before": "REQUIRED if style=code: the actual short buggy code
-          line for this topic, <=26 characters, e.g. 'delete obj.key'",
-        "code_after": "REQUIRED if style=code: the actual short fixed code
-          line for this topic, <=26 characters, e.g. 'obj.key = null'",
-        "diagram_steps": "REQUIRED if style=diagram: an array of 2-4 short
-          (<=20 character) step labels specific to this topic's actual
-          mechanism, in order, e.g. ['Object has a shape', 'delete runs',
-          'Shape invalidated', 'Falls to dict mode']"
-      }}
+      "slide_number": 1,
+      "type": "hook",
+      "title": "",
+      "content": "",
+      "code": "",
+      "visual_type": "",
+      "visual_story": "",
+      "infographic": "",
+      "highlight": "",
+      "design_emphasis": ""
     }},
     {{
-      "type": "content",
-      "heading": "3-5 word heading for this slide, e.g. 'Fix It With let'",
-      "icon": "one of: bug, warning, idea, clock, chart, star - pick whichever
-        best matches this slide's role (bug=the problem/buggy code,
-        warning=a risk/gotcha, idea=the fix/how it works, clock=timing or
-        real-world impact over time, chart=data/comparison/impact, star=pro
-        tip/bonus insight)",
-      "panels": [
-        {{"title": "short 2-3 word panel label fitting this panel's role, e.g. 'Code Input', 'Buggy Code', 'The Fix', 'Console Output', 'Why It Happens', 'Real Impact', 'Pro Tip'", "kind": "code | flow | output (pick whichever best fits this panel's content)", "lines": ["for kind=code: up to 5 short code lines, <=30 chars each. for kind=flow: 2-4 short labels <=26 chars, sequential steps/facts. for kind=output: 2-4 short values/lines <=20 chars each"], "result": "optional short verified/result/takeaway label, <=22 chars", "plain": "ONE short plain-English sentence, <=14 words, NO code and NO jargon, explaining in everyday terms why this specific panel matters or what it means for the reader - written so a developer who is not deeply familiar with engine/runtime internals still gets the point"}}
-      ]
+      "slide_number": 2,
+      "type": "simple_explanation",
+      "title": "",
+      "content": "",
+      "code": "",
+      "visual_type": "",
+      "visual_story": "",
+      "infographic": "",
+      "highlight": "",
+      "design_emphasis": ""
     }},
-    ... exactly 6 of these "content" slides total, each with exactly 4
-    panels, following this narrative arc across the 6 slides so the full
-    carousel tells a complete step-by-step story (don't label the slides
-    with these exact words, just follow the arc via natural headings):
-      1. THE PROBLEM - show the buggy/naive code and its unexpected output
-      2. WHY IT HAPPENS - the actual internal/engine mechanism causing it
-      3. THE FIX - the corrected code
-      4. HOW THE FIX WORKS - the internal mechanism that makes the fix work
-      5. REAL-WORLD IMPACT - a concrete scenario where this bug actually
-         bites (production incident, perf issue, confusing behavior, etc.)
-      6. PRO TIP - a related best practice, edge case, or common variant of
-         this same mistake developers should also watch for
-    Vary the 4 panel titles/kinds per slide to fit what that slide is
-    actually showing (e.g. slide 5 might use panels like "Scenario",
-    "What Breaks", "User Impact", "Root Cause" instead of the code/output
-    panel titles used in slides 1-4) rather than repeating identical panel
-    labels on every slide ...,
     {{
+      "slide_number": 3,
+      "type": "code_example",
+      "title": "",
+      "content": "",
+      "code": "",
+      "visual_type": "",
+      "visual_story": "",
+      "infographic": "",
+      "highlight": "",
+      "design_emphasis": ""
+    }},
+    {{
+      "slide_number": 4,
+      "type": "flow",
+      "title": "",
+      "content": "",
+      "code": "",
+      "visual_type": "",
+      "visual_story": "",
+      "infographic": "",
+      "highlight": "",
+      "design_emphasis": ""
+    }},
+    {{
+      "slide_number": 5,
+      "type": "under_the_hood",
+      "title": "",
+      "content": "",
+      "code": "",
+      "visual_type": "",
+      "visual_story": "",
+      "infographic": "",
+      "highlight": "",
+      "design_emphasis": ""
+    }},
+    {{
+      "slide_number": 6,
+      "type": "common_mistake",
+      "title": "",
+      "content": "",
+      "code": "",
+      "visual_type": "",
+      "visual_story": "",
+      "infographic": "",
+      "highlight": "",
+      "design_emphasis": ""
+    }},
+    {{
+      "slide_number": 7,
+      "type": "better_approach",
+      "title": "",
+      "content": "",
+      "code": "",
+      "visual_type": "",
+      "visual_story": "",
+      "infographic": "",
+      "highlight": "",
+      "design_emphasis": ""
+    }},
+    {{
+      "slide_number": 8,
       "type": "summary",
-      "heading": "short takeaway heading",
-      "body": "1-2 sentence key takeaway to remember, precise and correct",
-      "cta": "Follow {BRAND_HANDLE} for daily JS/React/Next.js deep dives"
+      "title": "",
+      "content": "",
+      "code": "",
+      "visual_type": "",
+      "visual_story": "",
+      "infographic": "",
+      "highlight": "",
+      "design_emphasis": ""
     }}
   ],
-  "caption_hook": "ONE single short sentence/question, <=18 words, naming
-    the specific bug/topic in plain language, no jargon - this is ONLY the
-    opening line, never a paragraph. WRONG: cramming the whole explanation
-    into this one field. RIGHT: 'Ever deleted one key and watched your app
-    get 10x slower?'",
-  "caption_points": [
-    "EXACTLY 3 to 4 array entries (never fewer, never merged into one
-     string). Each entry is its OWN separate short sentence, <=15 words,
-     ONE idea only, plain English, no code. Together they let someone fully
-     get the concept without reading the slides. Example of the CORRECT
-     shape (4 separate short array entries, not one paragraph):
-     ['delete does not just remove a key - it changes the object internally.',
-      'That change can push the object into a slower mode for good.',
-      'Assigning undefined instead keeps the fast path intact.',
-      'This is an easy mistake that quietly hurts performance.']"
-  ],
-  "caption_takeaway": "one short closing line, <=15 words, plain language,
-    a clear call to action to save/share/follow - may start with a relevant
-    emoji like 💡 or 👉",
-  "seo_keywords": [
-    "3 to 5 high-search-volume, evergreen keyword phrases developers
-     actually search for around this exact topic (e.g. 'javascript
-     interview questions', 'react performance optimization', 'nextjs best
-     practices' - whichever genuinely fit this topic, don't force unrelated
-     ones), as a flat array of short phrases, no # symbols"
-  ],
-  "hashtags": [
-    "10 to 15 hashtags as a flat array (include the # in each string), mixing:
-     3-4 broad/high-volume (#JavaScript #WebDevelopment #Coding
-     #Programming), 5-7 niche/specific to THIS exact topic (include realistic
-     high-traffic developer-community tags like #100DaysOfCode #CodeNewbie
-     #WebDev #Frontend #ReactJS #JavaScriptTips where relevant), and 1-2
-     community/branded (#DevCommunity #ModernJavaScriptHub)."
-  ]
+
+  "caption_hook": "",
+  "caption_points": [],
+  "caption_takeaway": "",
+  "seo_keywords": [],
+  "hashtags": []
 }}
 
-All on-image text must be short and punchy - this is for a 1080x1350 image
-panel, not an essay. Keep code lines under 30 characters so they don't get
-truncated. Total slide count must be exactly 8 (1 title + 6 content + 1
-summary)."""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IMPORTANT FINAL CHECK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Before returning the JSON, verify:
+
+✓ Exactly 8 slides
+✓ Slide 1 = Hook
+✓ Slide 2 = Simple explanation
+✓ Slide 3 = Code
+✓ Slide 4 = Flow
+✓ Slide 5 = Under the hood
+✓ Slide 6 = Common mistake
+✓ Slide 7 = Better approach
+✓ Slide 8 = Summary
+✓ Every slide adds new information
+✓ No unnecessary repetition
+✓ No avatar
+✓ At least 1 meaningful infographic/visual explanation per slide
+✓ Code is short and valid
+✓ Technical claims are accurate
+✓ Technical jargon is explained
+✓ Text is suitable for 1080x1350
+✓ No long paragraphs
+✓ Visual story is specified for every slide
+✓ Infographic instructions are specified for every slide
+✓ Output is valid JSON only"""
+
+
+def build_carousel(topic, research):
+    prompt = CAROUSEL_PROMPT_TEMPLATE.format(topic=topic, research=research)
 
     data = gemini_call(
         {
@@ -2000,8 +2966,8 @@ def main():
     for i, slide in enumerate(slides, start=1):
         fname = f"{TODAY}-slide{i}.png"
         out_path = os.path.join(IMAGES_DIR, fname)
-        variant = cover_variant if slide.get("type") == "title" else None
-        slide_topic = topic if slide.get("type") == "title" else None
+        variant = cover_variant if slide.get("type") == "hook" else None
+        slide_topic = topic if slide.get("type") == "hook" else None
         render_slide(slide, i, total, out_path, variant=variant, topic=slide_topic)
         filenames.append(fname)
 

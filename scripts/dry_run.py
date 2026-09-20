@@ -14,125 +14,117 @@ import sys
 
 import generate as g
 
-# A realistic script, exactly the shape build_carousel() returns from Gemini.
+# A realistic script, exactly the shape build_carousel() returns from Gemini
+# under the new flat schema: slide_number/type/title/content/code/
+# visual_type/visual_story/infographic/highlight/design_emphasis per slide.
 CAROUSEL = {
     "slides": [
         {
-            "type": "title",
-            "kicker": "V8 DEEP DIVE",
-            "alert": "Stop Using delete Like This!",
+            "slide_number": 1,
+            "type": "hook",
             "title": "Why delete Makes Objects 10x Slower",
-            "subtitle": "The hidden shape-transition cost most developers never see.",
-            "avatar_line": "Hey Devs! Deleting a property can silently drop your object "
-                           "out of V8's fast path. Let me show you why!",
-            "cover_visual": {
-                "style": "code",
-                "bad_label": "Before",
-                "good_label": "After",
-                "code_before": "delete obj.key",
-                "code_after": "obj.key = undefined",
-            },
+            "content": "Deleting one property can silently drop your object out of "
+                       "V8's fast path. Here's why that innocent-looking line is "
+                       "secretly a performance trap.",
+            "code": "",
+            "visual_type": "BEFORE → AFTER",
+            "visual_story": "A fast object becomes slow the moment delete runs on it.",
+            "infographic": "Speedometer or before/after contrast: fast vs slow.",
+            "highlight": "Stop Using delete Like This!",
+            "design_emphasis": "Bold warning tone, high contrast.",
         },
         {
-            "type": "content",
-            "heading": "The Problem",
-            "icon": "bug",
-            "panels": [
-                {"title": "Naive Code", "kind": "code",
-                 "lines": ["const o = { a: 1, b: 2 };", "delete o.a;", "use(o.b);"],
-                 "plain": "This looks totally normal - nothing here looks risky."},
-                {"title": "What You Expect", "kind": "flow",
-                 "lines": ["Property removed", "Same speed as before"],
-                 "plain": "You'd assume removing one key changes nothing else."},
-                {"title": "Measured", "kind": "output",
-                 "lines": ["before: 12ms", "after: 121ms"], "result": "10x slower",
-                 "plain": "But the object got dramatically slower to read."},
-                {"title": "Why Odd", "kind": "flow",
-                 "lines": ["Same data", "Same loop", "Very different time"],
-                 "plain": "Nothing about your code changed, yet performance tanked."},
-            ],
+            "slide_number": 2,
+            "type": "simple_explanation",
+            "title": "Objects Have a Hidden Shape",
+            "content": "Think of a hidden class like a blueprint V8 uses to "
+                       "recognize objects with the same shape. As long as an "
+                       "object keeps its shape, V8 can read it fast.",
+            "code": "",
+            "visual_type": "VISUAL METAPHOR",
+            "visual_story": "A blueprint stamping out identical object shapes.",
+            "infographic": "Simple blueprint/stamp metaphor icon.",
+            "highlight": "",
+            "design_emphasis": "Friendly, simple, one big metaphor.",
         },
         {
-            "type": "content",
-            "heading": "Why It Happens",
-            "icon": "warning",
-            "panels": [
-                {"title": "Hidden Class", "kind": "flow",
-                 "lines": ["Object has a shape", "Shape maps key to slot"]},
-                {"title": "On delete", "kind": "flow",
-                 "lines": ["Shape invalidated", "Object goes dict mode"]},
-                {"title": "Dict Mode", "kind": "output",
-                 "lines": ["Hash lookup", "No inline cache"], "result": "slow path"},
-                {"title": "Cost", "kind": "output",
-                 "lines": ["Every read pays", "JIT deopts"], "result": "stays slow"},
-            ],
+            "slide_number": 3,
+            "type": "code_example",
+            "title": "The Buggy Code",
+            "content": "This looks totally normal, but delete quietly reshapes "
+                       "the object.",
+            "code": "const o = { a: 1, b: 2 };\ndelete o.a;\nuse(o.b);",
+            "visual_type": "CODE + CALLOUTS",
+            "visual_story": "Highlight the delete line as the culprit.",
+            "infographic": "Code editor with an arrow pointing at line 2.",
+            "highlight": "delete o.a; <- this is the problem",
+            "design_emphasis": "Monospace code block, one highlighted line.",
         },
         {
-            "type": "content",
-            "heading": "The Fix",
-            "icon": "idea",
-            "panels": [
-                {"title": "Assign Instead", "kind": "code",
-                 "lines": ["const o = { a: 1, b: 2 };", "o.a = undefined;", "use(o.b);"]},
-                {"title": "Or Rebuild", "kind": "code",
-                 "lines": ["const { a, ...rest } = o;", "return rest;"]},
-                {"title": "Result", "kind": "output",
-                 "lines": ["12ms", "12ms"], "result": "fast path kept"},
-                {"title": "Trade-off", "kind": "flow",
-                 "lines": ["Key still present", "Use rest for clean copy"]},
-            ],
+            "slide_number": 4,
+            "type": "flow",
+            "title": "What Actually Happens",
+            "content": "Deleting a key doesn't just remove it - it invalidates "
+                       "the object's internal shape entirely.",
+            "code": "",
+            "visual_type": "FLOW DIAGRAM",
+            "visual_story": "Object has a shape -> delete runs -> shape invalidated -> dict mode.",
+            "infographic": "4-step vertical flow with arrows.",
+            "highlight": "",
+            "design_emphasis": "Sequential arrows, escalating red tone.",
         },
         {
-            "type": "content",
-            "heading": "How The Fix Works",
-            "icon": "idea",
-            "panels": [
-                {"title": "Shape Stays", "kind": "flow",
-                 "lines": ["Slot kept", "Only value changes"]},
-                {"title": "Inline Cache", "kind": "flow",
-                 "lines": ["Same hidden class", "IC still hits"]},
-                {"title": "Engine View", "kind": "output",
-                 "lines": ["mode: fast", "ic: monomorphic"], "result": "no deopt"},
-                {"title": "Rest Copy", "kind": "flow",
-                 "lines": ["New object", "Fresh clean shape"]},
-            ],
+            "slide_number": 5,
+            "type": "under_the_hood",
+            "title": "Dictionary Mode Kicks In",
+            "content": "Once the shape breaks, V8 falls back to a slower hash-map "
+                       "style lookup for every future read of that object.",
+            "code": "",
+            "visual_type": "UNDER-THE-HOOD DIAGRAM",
+            "visual_story": "Fast inline-cache lookup vs slow hash lookup.",
+            "infographic": "Two lookup paths side by side, one fast one slow.",
+            "highlight": "Every future read now pays a hash lookup",
+            "design_emphasis": "Technical, engine-level diagram.",
         },
         {
-            "type": "content",
-            "heading": "Real World Impact",
-            "icon": "chart",
-            "panels": [
-                {"title": "Scenario", "kind": "flow",
-                 "lines": ["Cache layer evicts keys with delete"]},
-                {"title": "What Breaks", "kind": "flow",
-                 "lines": ["Every read slows", "CPU climbs"]},
-                {"title": "Measured", "kind": "output",
-                 "lines": ["p95 +40%"], "result": "prod incident"},
-                {"title": "Root Cause", "kind": "flow",
-                 "lines": ["Hot object in dict mode"]},
-            ],
+            "slide_number": 6,
+            "type": "common_mistake",
+            "title": "The Mistake Developers Make",
+            "content": "Reaching for delete to \"clean up\" an object is the "
+                       "habit that causes this - it feels harmless but isn't.",
+            "code": "delete obj.key;",
+            "visual_type": "COMPARISON",
+            "visual_story": "Bad approach vs the cost it causes.",
+            "infographic": "Red X card with the delete line.",
+            "highlight": "",
+            "design_emphasis": "Red/warning tone, no shaming language.",
         },
         {
-            "type": "content",
-            "heading": "Pro Tip",
-            "icon": "star",
-            "panels": [
-                {"title": "Use A Map", "kind": "code",
-                 "lines": ["const m = new Map();", "m.delete(key);"]},
-                {"title": "Why Better", "kind": "flow",
-                 "lines": ["Built for churn", "No hidden class"]},
-                {"title": "Rule", "kind": "output",
-                 "lines": ["Objects: fixed shape", "Maps: dynamic keys"], "result": "right tool"},
-                {"title": "Watch For", "kind": "flow",
-                 "lines": ["delete in loops", "delete on hot paths"]},
-            ],
+            "slide_number": 7,
+            "type": "better_approach",
+            "title": "Assign undefined Instead",
+            "content": "Keep the shape intact by assigning undefined, or rebuild "
+                       "the object with rest syntax when you need a real copy.",
+            "code": "obj.key = undefined;\nconst { key, ...rest } = obj;",
+            "visual_type": "DECISION TREE",
+            "visual_story": "If you need the key gone forever, use rest; otherwise assign undefined.",
+            "infographic": "Small decision tree with two branches.",
+            "highlight": "Keeps the fast path intact",
+            "design_emphasis": "Green/positive tone.",
         },
         {
+            "slide_number": 8,
             "type": "summary",
-            "heading": "Key Takeaway",
-            "body": "delete doesn't just remove a key, it changes the object's hidden "
-                    "class and can drop it into dictionary mode for the rest of its life.",
-            "cta": "Follow @modernjavascripthub for daily JS/React/Next.js deep dives",
+            "title": "Key Takeaway",
+            "content": "delete doesn't just remove a key - it changes the "
+                       "object's hidden class and can drop it into dictionary "
+                       "mode for the rest of its life.",
+            "code": "",
+            "visual_type": "VISUAL METAPHOR",
+            "visual_story": "A closing, memorable summary card.",
+            "infographic": "",
+            "highlight": "Assign undefined instead of using delete",
+            "design_emphasis": "Calm, confident closing tone.",
         },
     ],
     "caption_hook": "Ever deleted one property and watched a hot loop get 10x slower?",
@@ -168,10 +160,11 @@ def main():
     files = []
     for i, slide in enumerate(slides, start=1):
         path = os.path.join(outdir, f"slide{i}.png")
-        slide_variant = variant if slide.get("type") == "title" else None
-        g.render_slide(slide, i, total, path, variant=slide_variant)
+        slide_variant = variant if slide.get("type") == "hook" else None
+        slide_topic = "Why deleting an object property in V8 can make later reads up to 10x slower" if slide.get("type") == "hook" else None
+        g.render_slide(slide, i, total, path, variant=slide_variant, topic=slide_topic)
         files.append(path)
-        print(f"rendered {path} ({slide.get('type', 'content')})")
+        print(f"rendered {path} ({slide.get('type', 'simple_explanation')})")
 
     ig, tg = g.build_captions(
         CAROUSEL["caption_hook"],
@@ -188,21 +181,14 @@ def main():
     print("\n--- INSTAGRAM CAPTION ---")
     print(ig)
 
-    # Extra check: render slide 1 with a "diagram"-style cover_visual too, so
-    # both cover-visual styles get eyeballed, not just "code".
-    diagram_slide = dict(slides[0])
-    diagram_slide["cover_visual"] = {
-        "style": "diagram",
-        "diagram_steps": [
-            "Object has a shape",
-            "delete removes a slot",
-            "Shape invalidated",
-            "Falls to dict mode",
-        ],
-    }
-    diagram_path = os.path.join(outdir, "slide1_diagram_variant.png")
-    g.render_slide(diagram_slide, 1, total, diagram_path, variant=variant)
-    print(f"rendered {diagram_path} (title, diagram cover_visual)")
+    # Extra check: render the hook/thumbnail slide with the OTHER cover
+    # variant too, so both layouts get eyeballed, not just whichever one
+    # today's history rotation happened to pick.
+    other_variant = next((v for v in g.COVER_VARIANTS if v["id"] != variant["id"]), g.COVER_VARIANTS[0])
+    other_path = os.path.join(outdir, "slide1_other_variant.png")
+    g.render_slide(slides[0], 1, total, other_path, variant=other_variant,
+                    topic="Why deleting an object property in V8 can make later reads up to 10x slower")
+    print(f"rendered {other_path} (hook, variant={other_variant['id']})")
 
     # Extra check: prove the caption safety net turns a misbehaving,
     # paragraph-shaped Gemini response into real bullets.
